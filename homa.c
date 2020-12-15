@@ -13,8 +13,7 @@ MODULE_AUTHOR("Lucas");
 MODULE_DESCRIPTION("Homa transport protocol");
 MODULE_VERSION("0.01");
 
-// IP协议空间内的Homa协议号
-#define IPPROTO_HOMA 140
+
 
 // 暂时没有用到，只是在proto homa_proto结构体中赋予变量使用
 long sysctl_homa_mem[3] __read_mostly;  //系统内存用的
