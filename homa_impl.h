@@ -3,7 +3,7 @@
  */
 
 #include <net/inet_sock.h>
-
+typedef unsigned __poll_t;
 /* Information about an open socket that uses Homa. */
 struct homa_sock {
 	/* The first part of the structure consists of generic socket data.
