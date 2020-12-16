@@ -158,26 +158,34 @@ homa_exit(void)
 module_init(homa_init);
 module_exit(homa_exit);
 
+void homa_client_rpc_destroy(struct homa_client_rpc *crpc) {
+    __list_del_entry(&crpc->client_rpcs_links);
+    printk(KERN_NOTICE "[homa close]crpc  link del\n");
+    homa_message_out_destroy(&crpc->request);
+    printk(KERN_NOTICE "[homa close]crpc  hmo del\n");
+}
 //proto的一些需要自定义的接口
 // homa_close()
 //invoked when close system call is invoked on a Homa socket.
 void homa_close(struct sock *sk, long timeout)
 {
     struct homa_sock *hsk = homa_sk(sk);                        //获取到homa socket 结构体
-	struct list_head *pos;             
+	struct list_head *pos;
+    printk(KERN_NOTICE "[homa close] begin del\n");
 	
 	list_del(&hsk->socket_links);                               //删除释放所有socket link
+    printk(KERN_NOTICE "[homa close]socket_links del\n");
 	list_for_each(pos, &hsk->client_rpcs) {        
 		struct homa_client_rpc *crpc = list_entry(pos, struct homa_client_rpc, client_rpcs_links);     //释放所有的rpc
+        printk(KERN_NOTICE "[homa close]crpc get\n");
 		homa_client_rpc_destroy(crpc);
+        printk(KERN_NOTICE "[homa close]crpc  free\n");
 		kfree(crpc);
 	}
+    printk(KERN_NOTICE "[homa close]rpc del\n");
     sk_common_release(sk);                                      //整成正常sk_buffer
 }
-void homa_client_rpc_destroy(struct homa_client_rpc *crpc) {
-	__list_del_entry(&crpc->client_rpcs_links);
-	homa_message_out_destroy(&crpc->request);
-}
+
 
 /**
  * homa_disconnect(): invoked when disconnect system call is invoked on a
@@ -249,7 +257,7 @@ int homa_getsockopt(struct sock *sk, int level, int optname, char __user *optval
 int homa_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 {
     struct inet_sock *inet = inet_sk(sk);
-    struct sk_buff *hsk; = homa_sk(sk);
+    struct homa_sock *hsk = homa_sk(sk);
     __be32 saddr, daddr;
     __be16 dport, sport;
     //flowi在某种程度上类似于访问控制列表(ACL):它根据所选L3和L4头字段的值(如IP地址、L4端口号等)定义流量的聚合。例如，它被用作路由查找的搜索键。
@@ -302,13 +310,11 @@ int homa_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
     //将crpc加入hsk的client_rpcs list中
     list_add(&crpc->client_rpcs_links, &hsk->client_rpcs);
 
-	err = homa_message_out_init(&crpc->request, sk, crpc->id,
-			FROM_CLIENT, msg, len, &rt->dst);
+	err = homa_message_out_init(&crpc->request, sk, crpc->id, FROM_CLIENT, msg, len, &rt->dst);
         if (unlikely(err != 0)) {
 		goto error;
 	}
-    printk(KERN_NOTICE  "[homa_sendmsg]rpcID:%lu ; msg len:%lu and msg data\n", crpc->id.sequence,msg);
-u
+    printk(KERN_NOTICE "[send msg] rpcID:%llu ; msg len:%lu \n", crpc->id.sequence, len);
 	return len;
     // //alloc_skb通过调用函数kmem_cache_alloc从缓存中获取sk_buff数据结构，并通过调用kmalloc获取数据缓冲区，
     // skb = alloc_skb(1500, GFP_KERNEL);
@@ -459,12 +465,9 @@ int homa_handler(struct sk_buff *skb)
     printk(KERN_NOTICE
            "[homa_handler] incoming Homa packet: len %u, data_len %u, data \"%.*s\"\n",
            skb->len, skb->data_len, skb->len, skb->data);
-    printk(KERN_NOTICE
-           "[homa_handler] network header size %lu, memory allocated %lu\n",
-           skb->data -
-               skb_network_header(skb),
-           atomic_long_read(
-               homa_prot.memory_allocated));
+    printk(KERN_NOTICE "[homa_handler] network header size %lu, memory allocated %lu\n",
+           skb->data - skb_network_header(skb),
+           atomic_long_read(homa_prot.memory_allocated));
     return 0;
 }
 
