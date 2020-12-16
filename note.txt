@@ -1,6 +1,6 @@
 Notes for Homa implementation in Linux:
 ---------------------------------------
-
+这个版本内核会报错,内存问题但本菜鸡不知道为啥
 * Things to do:
   * Figure out socket locking disciplines.       找出socket locking规则
   * Many unimplemented interface functions.
