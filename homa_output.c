@@ -90,8 +90,8 @@ int homa_message_out_init(struct homa_message_out *hmo, struct sock *sk,
             *last_link = NULL;
         }
     }
-    printk(KERN_NOTICE "dst: %p ref count: %d (after)\n", dst,
-            dst->__refcnt.counter);
+    hmo->next_packet = hmo->packets;
+    printk(KERN_NOTICE "dst: %p ref count: %d (after)\n", dst,dst->__refcnt.counter);
     return 0;
 }
 
