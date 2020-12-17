@@ -23,9 +23,10 @@ typedef unsigned __poll_t;
 _Static_assert(1500 >= (HOMA_MAX_DATA_PER_PACKET + HOMA_MAX_IPV4_HEADER + HOMA_MAX_HEADER), "Message length constants overflow Etheret frame");
 //定义在sk_buffs为Homa之外的header（IPV4+以太网VLAN）保留多少空间。
 #define HOMA_SKB_RESERVE (HOMA_MAX_IPV4_HEADER + 20)
-// all Homa packet buffers的总大小呢
-#define HOMA_SKB_SIZE (HOMA_MAX_DATA_PER_PACKET + HOMA_MAX_HEADER + HOMA_SKB_RESERVE)
+// all Homa packet buffers的总大小 "sizeof(void*)" 用来指向homa_next_skb
+#define HOMA_SKB_SIZE (HOMA_MAX_DATA_PER_PACKET + HOMA_MAX_HEADER + HOMA_SKB_RESERVE + sizeof(void*))
 
+//===================结构体，变量================
 extern struct homa homa;
 //[homa_sock] 一个open状态的homa socket的基本信息
 struct homa_sock
@@ -39,10 +40,7 @@ struct homa_sock
     struct list_head socket_links; //用来链接到&homa.sockets
     struct list_head client_rpcs;  //这个socket上活跃的rpc list
 };
-static inline struct homa_sock *homa_sk(const struct sock *sk)
-{
-    return (struct homa_sock *)sk;
-}
+
 //[homa] - 有关Homa协议实施的Overall information;除单元测试外，一次通常全局唯一
 struct homa
 {
@@ -58,8 +56,7 @@ enum homa_packet_type
     GRANT = 22,
     RESEND = 23,
     BUSY = 24,
-    ABORT = 25,
-    BOGUS = 26, /*  unit tests 中使用 */
+    BOGUS = 25, /*  unit tests 中使用 */
     /* If you add a new type here, you must also do the following:
      * 1. Change BOGUS so it is the highest opcode
      * 2. Add support for the new opcode in op_symbol and header_to_string
@@ -144,15 +141,15 @@ _Static_assert(sizeof(struct busy_header) <= HOMA_MAX_HEADER,
 //[homa_message_out] 描述这个host发出的所有msg,无论req/resp
 struct homa_message_out
 {
-    __u32 length;                //除去header总message size
-    struct sk_buff_head packets; //消息数据构成的一个结构体包含指向sk_buffer pointer，这些数据已经打包到sk_buffs中并可以进行传输。
+    int length;                //除去header总message size
+    struct sk_buff *packets;      //一个simple link,通过homa_next_skb获取下一个sk，这些数据已经打包到sk_buffs中并可以进行传输。
                                  //该列表按消息中的偏移量顺序排列（首先偏移量为0）；
                                  //每个数据包（最后一个数据包除外）均包含有效负载的HOMA_MAX_DATA_PER_PACKET。 注意：我们这里不使用锁
 
     struct sk_buff *next_packet; //指向request里面下一个要发送的packet;在此之前的所有数据包都已发送。 NULL表示整个消息已发送。
-
-    __u32 unscheduled_bytes; //发送的消息的unscheduled初始字节。
-    __u32 limit;             //当offests大于这个数量,发送前需要grant
+    int next_offset;         //下一个要发送的packet第一个字节在总msg中的offset
+    int unscheduled_bytes; //发送的消息的unscheduled初始字节。
+    int limit;             //当offests大于这个数量,发送前需要grant
     __u8 priority;           //后面发送的包的优先级
 };
 
@@ -160,16 +157,31 @@ struct homa_message_out
 struct homa_client_rpc
 {
     struct rpc_id id;                   //唯一id
-    struct dst_entry *dst;              //用来route的,最终必须参考这一点
+    struct flowi fl;                    //Addressing info
+    struct dst_entry *dst;              //用来route的,我们持有一个ref，最终必须释放
     struct list_head client_rpcs_links; //用来将这个homa_client_rpc连接到&homa_sock.client_rpcs.
     struct homa_message_out request;    //message request信息
 };
+//=================inline=============
+static inline struct homa_sock *homa_sk(const struct sock *sk)
+{
+    return (struct homa_sock *)sk;
+}
+static inline struct sk_buff **homa_next_skb(struct sk_buff *skb)
+{
+    return (struct sk_buff **) (skb->head + HOMA_MAX_DATA_PER_PACKET+ HOMA_MAX_HEADER + HOMA_SKB_RESERVE);
+}
+
+//======================================
 
 extern void homa_client_rpc_destroy(struct homa_client_rpc *crpc);
 extern void homa_message_out_destroy(struct homa_message_out *hmo);
 extern int homa_message_out_init(struct homa_message_out *hmo, struct sock *sk,
                                  struct rpc_id id, __u8 direction, struct msghdr *msg,
                                  size_t len, struct dst_entry *dst);
+extern char *homa_print_header(char *packet, char *buffer, int length);
+extern void homa_xmit_packets(struct homa_message_out *hmo, struct sock *sk,
+                              struct flowi *fl);
 
 //================== 一些声明 ==========================
 //[homa_prot]proto 结构的一些实现

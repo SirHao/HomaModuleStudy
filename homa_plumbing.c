@@ -161,9 +161,7 @@ module_exit(homa_exit);
 void homa_client_rpc_destroy(struct homa_client_rpc *crpc) {
     dst_release(crpc->dst);
     __list_del_entry(&crpc->client_rpcs_links);
-    printk(KERN_NOTICE "[homa close]crpc  link del and next del rpc request\n");
     homa_message_out_destroy(&crpc->request);
-    printk(KERN_NOTICE "[homa close]crpc  hmo del\n");
 }
 //proto的一些需要自定义的接口
 // homa_close()
@@ -176,15 +174,11 @@ void homa_close(struct sock *sk, long timeout)
     printk(KERN_NOTICE "[homa_close]closing socket %d\n", hsk->client_port);
 	
 	list_del(&hsk->socket_links);                               //删除释放所有socket link
-    printk(KERN_NOTICE "[homa close]socket_links del\n");
 	list_for_each(pos, &hsk->client_rpcs) {        
 		struct homa_client_rpc *crpc = list_entry(pos, struct homa_client_rpc, client_rpcs_links);     //释放所有的rpc
-        printk(KERN_NOTICE "[homa close]crpc get\n");
 		homa_client_rpc_destroy(crpc);
-        printk(KERN_NOTICE "[homa close]crpc  free\n");
 		kfree(crpc);
 	}
-    printk(KERN_NOTICE "[homa close]rpc del\n");
     sk_common_release(sk);                                      //整成正常sk_buffer
 }
 
@@ -258,11 +252,9 @@ int homa_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 {
     struct inet_sock *inet = inet_sk(sk);
     struct homa_sock *hsk = homa_sk(sk);
-    __be32 saddr, daddr;
-    __be16 dport, sport;
-    //flowi在某种程度上类似于访问控制列表(ACL):它根据所选L3和L4头字段的值(如IP地址、L4端口号等)定义流量的聚合。例如，它被用作路由查找的搜索键。
-    struct flowi4 fl4;
-    struct rtable *rt = NULL;
+
+    //原来有个:flowi在某种程度上类似于访问控制列表(ACL):它根据所选L3和L4头字段的值(如IP地址、L4端口号等)定义流量的聚合。例如，它被用作路由查找的搜索键。
+    struct rtable *rt;
     int err = 0;
     struct homa_client_rpc *crpc = NULL;
 
@@ -272,32 +264,7 @@ int homa_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
     if (dest_in->sin_family != AF_INET) {
         return -EAFNOSUPPORT;
     }
-    daddr = dest_in->sin_addr.s_addr;
-    saddr = inet->inet_saddr;
-    dport = 99;
-    sport = 99;
-    //慢速路径以生成路由结构。首先从调用flowi4_init_output构造描述此UDP流
-    flowi4_init_output(&fl4,
-                       sk->sk_bound_dev_if, //flowi4_oif
-                       sk->sk_mark,         //flowi4_mark
-                       inet->tos,           //flowi4_tos
-                       RT_SCOPE_UNIVERSE,   //sflowi4_cope ://目的地的距离。“NOWHERE”是为不存在的目的地保留的;"HOST"是我们的本地地址;“LINK”是目的地，位于直接连接;“UNIVERSE”在宇宙中无处不在。
-                       sk->sk_protocol,     //flowi4_proto
-                       0,                   //flowi4_flags
-                       daddr,
-                       saddr,
-                       dport,
-                       inet->inet_sport,
-                       sk->sk_uid);
-    //将套接字及其流结构传递到安全子系统，以便SELinux或SMACK之类的系统可以在流结构上设置安全性id值。
-    security_sk_classify_flow(sk, flowi4_to_flowi(&fl4));
-    //ip_route_output_flow将调用IP路由代码以为此流生成路由结构
-    rt = ip_route_output_flow(sock_net(sk), &fl4, sk);
-    if (IS_ERR(rt))
-    {
-        err = PTR_ERR(rt);
-        goto error;
-    }
+
     //分配一个crpc size的内存给crpc
     crpc = (struct homa_client_rpc *) kmalloc(sizeof(*crpc), GFP_KERNEL);
 	if (unlikely(!crpc)) {
@@ -306,49 +273,31 @@ int homa_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 
     crpc->id.port = hsk->client_port;
     crpc->id.sequence = hsk->next_outgoing_id; //给crpc分配id,并且homa_socket的next_outgoing_id自增
-	crpc->dst = &rt->dst;
+    crpc->dst = NULL;
     hsk->next_outgoing_id++;
     //将crpc加入hsk的client_rpcs list中
     list_add(&crpc->client_rpcs_links, &hsk->client_rpcs);
-
+    //原来显示声明的flowi4放入了rpc结构体里面，饿
+    flowi4_init_output(&crpc->fl.u.ip4, sk->sk_bound_dev_if, sk->sk_mark,
+                       inet->tos, RT_SCOPE_UNIVERSE, sk->sk_protocol,
+                       0, dest_in->sin_addr.s_addr, inet->inet_saddr,
+                       dest_in->sin_port, htonl(hsk->client_port),
+                       sk->sk_uid);
+    security_sk_classify_flow(sk, &crpc->fl);
+    rt = ip_route_output_flow(sock_net(sk), &crpc->fl.u.ip4, sk);
+    if (IS_ERR(rt)) {
+        err = PTR_ERR(rt);
+        goto error;
+    }
+    crpc->dst = &rt->dst;
+    //拷贝data到skb并设置路由
     err = homa_message_out_init(&crpc->request, sk, crpc->id,FROM_CLIENT, msg, len, crpc->dst);
     if (unlikely(err != 0)) {
 		goto error;
 	}
+    //发送数据
+    homa_xmit_packets(&crpc->request, sk, &crpc->fl);
 	return len;
-    // //alloc_skb通过调用函数kmem_cache_alloc从缓存中获取sk_buff数据结构，并通过调用kmalloc获取数据缓冲区，
-    // skb = alloc_skb(1500, GFP_KERNEL);
-    // //GFP_KERNEL是linux内存分配器的标志，标识着内存分配器将要采取的行为。分配器标志分为行为修饰符，区修饰符及类型。行为修饰符表示内核应当如何分配所需的内存。区修饰符表示内存区应当从何处分配。类型就是行为修饰符和区修饰符的合体
-    // /*#define GFP_KERNEL(__GFP_WAIT | __GFP_IO | __GFP_FS)
-    //     __GFP_WAIT ： 缺内存页的时候可以睡眠;
-    //     __GFP_IO ： 允许启动磁盘IO；
-    //     __GFP_FS ： 允许启动文件系统IO。*/
-    // if (!skb)
-    // {
-    //     printk(KERN_NOTICE
-    //            "Couldn't allocate sk_buff\n");
-    //     return -ENOMEM;
-    // }
-
-    // //也不知道干啥，先拿来预留着
-    // skb_reserve(skb, 200);
-    // err = skb_add_data_nocache(sk, skb, &msg->msg_iter,
-    //                            msg_data_left(msg));
-    // if (err != 0)
-    // {
-    //     printk(KERN_NOTICE
-    //            "Couldn't add data to sk_buff: %d\n",
-    //            err);
-    //     goto out;
-    // }
-    // //debug infomation
-    // printk(KERN_NOTICE
-    //        "protocol memory allocated %lu\n",
-    //        atomic_long_read(homa_prot.memory_allocated));
-
-    // //在skb中添加目的地
-    // skb_dst_set(skb, &rt->dst);
-    // err = ip_queue_xmit(sk, skb, flowi4_to_flowi(&fl4));
 
 error:
 	if (crpc) {
@@ -462,12 +411,8 @@ int homa_v4_early_demux_handler(struct sk_buff *skb)
  */
 int homa_handler(struct sk_buff *skb)
 {
-    printk(KERN_NOTICE
-           "[homa_handler] incoming Homa packet: len %u, data_len %u, data \"%.*s\"\n",
-           skb->len, skb->data_len, skb->len, skb->data);
-    printk(KERN_NOTICE "[homa_handler] network header size %lu, memory allocated %lu\n",
-           skb->data - skb_network_header(skb),
-           atomic_long_read(homa_prot.memory_allocated));
+    char buffer[200];
+    printk(KERN_NOTICE "[homa handler]incoming Homa packet: %s\n", homa_print_header(skb->data, buffer, sizeof(buffer)));
     return 0;
 }
 
