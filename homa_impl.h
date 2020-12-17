@@ -70,7 +70,6 @@ enum homa_packet_type
 //任何给定的瞬间处于活动状态的给定客户端的所有RPC中都必须是唯一的（包括在网络中浮动的延迟数据包）。 server添加client的network address以生成全局唯一标识符
 struct rpc_id
 {
-
     __u32 port;            /** @port: 发出RPC的＆homa_socket.client_port。*/
     __u64 sequence;        /** @sequence: 从@socket区分RPC。 */
 } __attribute__((packed)); // __attribute__((packed))  :使用该属性可以使得变量或者结构体成员使用最小的对齐方式，即对变量是一字节对齐，对域（field）是位对齐
@@ -161,6 +160,7 @@ struct homa_message_out
 struct homa_client_rpc
 {
     struct rpc_id id;                   //唯一id
+    struct dst_entry *dst;              //用来route的,最终必须参考这一点
     struct list_head client_rpcs_links; //用来将这个homa_client_rpc连接到&homa_sock.client_rpcs.
     struct homa_message_out request;    //message request信息
 };

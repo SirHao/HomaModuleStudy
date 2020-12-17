@@ -159,19 +159,21 @@ module_init(homa_init);
 module_exit(homa_exit);
 
 void homa_client_rpc_destroy(struct homa_client_rpc *crpc) {
+    dst_release(crpc->dst);
     __list_del_entry(&crpc->client_rpcs_links);
-    printk(KERN_NOTICE "[homa close]crpc  link del\n");
+    printk(KERN_NOTICE "[homa close]crpc  link del and next del rpc request\n");
     homa_message_out_destroy(&crpc->request);
     printk(KERN_NOTICE "[homa close]crpc  hmo del\n");
 }
 //proto的一些需要自定义的接口
 // homa_close()
 //invoked when close system call is invoked on a Homa socket.
+
 void homa_close(struct sock *sk, long timeout)
 {
     struct homa_sock *hsk = homa_sk(sk);                        //获取到homa socket 结构体
 	struct list_head *pos;
-    printk(KERN_NOTICE "[homa close] begin del\n");
+    printk(KERN_NOTICE "[homa_close]closing socket %d\n", hsk->client_port);
 	
 	list_del(&hsk->socket_links);                               //删除释放所有socket link
     printk(KERN_NOTICE "[homa close]socket_links del\n");
@@ -223,8 +225,6 @@ int homa_sock_init(struct sock *sk)
     homa.next_client_port++;
     list_add(&hsk->socket_links, &homa.sockets);
     INIT_LIST_HEAD(&hsk->client_rpcs);
-    printk(KERN_NOTICE
-           "Homa socket opened\n");
     return 0;
 }
 
@@ -266,8 +266,7 @@ int homa_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
     int err = 0;
     struct homa_client_rpc *crpc = NULL;
 
-    DECLARE_SOCKADDR(
-        struct sockaddr_in *, dest_in, msg->msg_name);
+    DECLARE_SOCKADDR(struct sockaddr_in *, dest_in, msg->msg_name);
     if (msg->msg_namelen < sizeof(*dest_in))
         return -EINVAL;
     if (dest_in->sin_family != AF_INET) {
@@ -304,17 +303,18 @@ int homa_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 	if (unlikely(!crpc)) {
 		return -ENOMEM;
 	}
-    //给crpc分配id,并且homa_socket的next_outgoing_id自增
-    crpc->id.sequence = hsk->next_outgoing_id;
+
+    crpc->id.port = hsk->client_port;
+    crpc->id.sequence = hsk->next_outgoing_id; //给crpc分配id,并且homa_socket的next_outgoing_id自增
+	crpc->dst = &rt->dst;
     hsk->next_outgoing_id++;
     //将crpc加入hsk的client_rpcs list中
     list_add(&crpc->client_rpcs_links, &hsk->client_rpcs);
 
-	err = homa_message_out_init(&crpc->request, sk, crpc->id, FROM_CLIENT, msg, len, &rt->dst);
-        if (unlikely(err != 0)) {
+    err = homa_message_out_init(&crpc->request, sk, crpc->id,FROM_CLIENT, msg, len, crpc->dst);
+    if (unlikely(err != 0)) {
 		goto error;
 	}
-    printk(KERN_NOTICE "[send msg] rpcID:%llu ; msg len:%lu \n", crpc->id.sequence, len);
 	return len;
     // //alloc_skb通过调用函数kmem_cache_alloc从缓存中获取sk_buff数据结构，并通过调用kmalloc获取数据缓冲区，
     // skb = alloc_skb(1500, GFP_KERNEL);
