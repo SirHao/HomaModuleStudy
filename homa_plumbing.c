@@ -129,7 +129,7 @@ static int __init homa_init(void)
         goto out_unregister;
     }
     
-    homa.next_client_port = 0x10000; //初始化分配的下一个client port
+    homa.next_client_port = HOMA_MIN_CLIENT_PORT; //初始化分配的下一个client port
 	INIT_LIST_HEAD(&homa.sockets);   //homa socket list初始化
 
     return 0;
@@ -173,7 +173,7 @@ int homa_bind(struct socket *sock, struct sockaddr *addr, int addr_len) {
         return -EAFNOSUPPORT;
     }
     port = ntohs(addr_in->sin_port);
-    if (port == 0) {
+    if ((port == 0) || (port >= HOMA_MIN_CLIENT_PORT)) {
         return -EINVAL;
     }
     //找到对应的port所在的socket,将对应传入的port绑定到socket
@@ -185,13 +185,6 @@ int homa_bind(struct socket *sock, struct sockaddr *addr, int addr_len) {
     return 0;
 }
 
-void homa_client_rpc_destroy(struct homa_client_rpc *crpc) {
-    printk(KERN_NOTICE "dst release: %p ref count: %d (release before)\n", crpc->dst,crpc->dst->__refcnt.counter);
-    dst_release(crpc->dst);
-    printk(KERN_NOTICE "dst release: %p ref count: %d (release after)\n", crpc->dst,crpc->dst->__refcnt.counter);
-    __list_del_entry(&crpc->client_rpcs_links);
-    homa_message_out_destroy(&crpc->request);
-}
 //proto的一些需要自定义的接口
 // homa_close()
 //invoked when close system call is invoked on a Homa socket.
@@ -203,11 +196,17 @@ void homa_close(struct sock *sk, long timeout)
     printk(KERN_NOTICE "[homa_close]closing socket %d\n", hsk->client_port);
 	
 	list_del(&hsk->socket_links);                               //删除释放所有socket link
-	list_for_each(pos, &hsk->client_rpcs) {        
-		struct homa_client_rpc *crpc = list_entry(pos, struct homa_client_rpc, client_rpcs_links);     //释放所有的rpc
+	//释放所有的
+	list_for_each(pos, &hsk->client_rpcs) {
+        struct homa_client_rpc *crpc = list_entry(pos,struct homa_client_rpc, client_rpc_links);    //释放所有的rpc
 		homa_client_rpc_destroy(crpc);
 		kfree(crpc);
 	}
+    list_for_each(pos, &hsk->server_rpcs) {
+        struct homa_server_rpc *srpc = list_entry(pos, struct homa_server_rpc, server_rpc_links);
+        homa_server_rpc_destroy(srpc);
+        kfree(srpc);
+    }
     sk_common_release(sk);                                      //整成正常sk_buffer
 }
 
@@ -242,12 +241,23 @@ int homa_ioctl(struct sock *sk, int cmd, unsigned long arg)
 int homa_sock_init(struct sock *sk)
 {
     struct homa_sock *hsk = homa_sk(sk);
-    hsk->client_port = homa.next_client_port;
-    hsk->next_outgoing_id = 1;
     hsk->server_port = 0;
+    while (1) {
+        if (homa.next_client_port < HOMA_MIN_CLIENT_PORT) {
+            homa.next_client_port = HOMA_MIN_CLIENT_PORT;
+        }
+        if (!homa_find_socket(&homa, homa.next_client_port)) {
+            break;
+        }
+        homa.next_client_port++;
+    }
+    hsk->client_port = homa.next_client_port;
     homa.next_client_port++;
+    hsk->next_outgoing_id = 1;
     list_add(&hsk->socket_links, &homa.sockets);
     INIT_LIST_HEAD(&hsk->client_rpcs);
+    INIT_LIST_HEAD(&hsk->server_rpcs);
+    printk(KERN_NOTICE "[hsk init]opened socket %d\n", hsk->client_port);
     return 0;
 }
 
@@ -283,7 +293,7 @@ int homa_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
     struct homa_sock *hsk = homa_sk(sk);
 
     //原来有个:flowi在某种程度上类似于访问控制列表(ACL):它根据所选L3和L4头字段的值(如IP地址、L4端口号等)定义流量的聚合。例如，它被用作路由查找的搜索键。
-    struct rtable *rt;
+
     int err = 0;
     struct homa_client_rpc *crpc = NULL;
 
@@ -299,36 +309,23 @@ int homa_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 	if (unlikely(!crpc)) {
 		return -ENOMEM;
 	}
-
-    crpc->id.port = hsk->client_port;
-    crpc->id.sequence = hsk->next_outgoing_id; //给crpc分配id,并且homa_socket的next_outgoing_id自增
-    crpc->dst = NULL;
+    crpc->id = hsk->next_outgoing_id; //给crpc分配id,并且homa_socket的next_outgoing_id自增
     hsk->next_outgoing_id++;
-    //将crpc加入hsk的client_rpcs list中
-    list_add(&crpc->client_rpcs_links, &hsk->client_rpcs);
-    //原来显示声明的flowi4放入了rpc结构体里面，饿
-    flowi4_init_output(&crpc->fl.u.ip4, sk->sk_bound_dev_if, sk->sk_mark,
-                       inet->tos, RT_SCOPE_UNIVERSE, sk->sk_protocol,
-                       0, dest_in->sin_addr.s_addr, inet->inet_saddr,
-                       dest_in->sin_port, htonl(hsk->client_port),
-                       sk->sk_uid);
-    security_sk_classify_flow(sk, &crpc->fl);
-    rt = ip_route_output_flow(sock_net(sk), &crpc->fl.u.ip4, sk);
-    if (IS_ERR(rt)) {
-        err = PTR_ERR(rt);
+    list_add(&crpc->client_rpc_links, &hsk->client_rpcs);              //将crpc加入hsk的client_rpcs list中
+    err = homa_addr_init(&crpc->dest, sk, inet->inet_saddr,             //
+                         hsk->client_port, dest_in->sin_addr.s_addr,
+                         ntohs(dest_in->sin_port));
+    if (unlikely(err != 0)) {
         goto error;
     }
-    crpc->dst = &rt->dst;
-    //拷贝data到skb并设置路由
-    err = homa_message_out_init(&crpc->request, sk, crpc->id,FROM_CLIENT, msg, len, crpc->dst);
+
+    err = homa_message_out_init(&crpc->request, sk, msg, len,
+                                &crpc->dest, hsk->client_port, crpc->id);
     if (unlikely(err != 0)) {
-		goto error;
-	}
-    //发送数据
-    printk(KERN_NOTICE "dst send: %p ref count: %d (send before)\n", crpc->dst,crpc->dst->__refcnt.counter);
-    homa_xmit_packets(&crpc->request, sk, &crpc->fl);
-    printk(KERN_NOTICE "dst send: %p ref count: %d (send after)\n", crpc->dst,crpc->dst->__refcnt.counter);
-	return len;
+        goto error;
+    }
+    homa_xmit_packets(&crpc->request, sk, &crpc->dest);
+    return len;
 
 error:
 	if (crpc) {
@@ -440,10 +437,49 @@ int homa_v4_early_demux_handler(struct sk_buff *skb)
  * homa_handler(): invoked by IP to handle an incoming Homa packet.
  * @return: Always 0?
  */
-int homa_handler(struct sk_buff *skb)
-{
+int homa_handler(struct sk_buff *skb) {
     char buffer[200];
-    printk(KERN_NOTICE "[homa handler]incoming Homa packet: %s\n", homa_print_header(skb->data, buffer, sizeof(buffer)));
+    __be32 saddr = ip_hdr(skb)->saddr;
+    int length = skb->len;
+    struct common_header *h = (struct common_header *) skb->data;
+    struct homa_server_rpc *srpc;
+    struct homa_sock *hsk;
+    __u16 dport;
+
+    if (length < HOMA_MAX_HEADER) {
+        printk(KERN_WARNING "[homa_hsk]Homa packet from %pI4 too short: %d bytes\n", &saddr, length);
+        goto discard;
+    }
+    printk(KERN_NOTICE "[homa_hsk]incoming Homa packet: %s\n",
+            homa_print_header(skb, buffer, sizeof(buffer)));
+
+    dport = htons(h->dport);
+    hsk = homa_find_socket(&homa, dport);
+    if (!hsk) {
+        /* Eventually should return an error result to sender if
+         * it is a client.
+         */
+        printk(KERN_WARNING "[homa_hsk]Homa packet from %pI4 sent to unknown port %u\n", &saddr, dport);
+        goto discard;
+    }
+    if (dport < HOMA_MIN_CLIENT_PORT) {
+        srpc = homa_find_server_rpc(hsk, saddr, ntohs(h->sport), h->id);
+        switch (h->type) {
+            case DATA:
+                homa_data_from_client(&homa, skb, hsk, srpc);
+                break;
+            case GRANT:
+                goto discard;
+            case RESEND:
+                goto discard;
+            case BUSY:
+                goto discard;
+        }
+    }
+    return 0;
+
+    discard:
+    kfree_skb(skb);
     return 0;
 }
 

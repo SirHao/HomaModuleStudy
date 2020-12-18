@@ -16,82 +16,61 @@
  * Return:   0 :success;     a negative: errno value.
  */
 int homa_message_out_init(struct homa_message_out *hmo, struct sock *sk,
-		struct rpc_id id, __u8 direction, struct msghdr *msg,
-		size_t len, struct dst_entry *dst)
+                          struct msghdr *msg, size_t len, struct homa_addr *dest,
+                          __u16 sport, __u64 id)
 {
     int bytes_left;
     struct sk_buff *skb;
     int err;
+    struct sk_buff **last_link = &hmo->packets;
 	
 	hmo->length = len;                                        //初始化hmo的总长度为 msglen
     hmo->packets = NULL;                                      //头结点初始化函数
     hmo->next_packet = NULL;
     hmo->next_offset = 0;
-    hmo->unscheduled_bytes = 7*HOMA_MAX_DATA_PER_PACKET;      //unscheduled_bytes初始化为7个数据包
-    hmo->limit = hmo->unscheduled_bytes;                      //limit这个版本目前就是unscheduled_bytes
+    hmo->unscheduled = 7*HOMA_MAX_DATA_PER_PACKET;      //unscheduled_bytes初始化为7个数据包
+    hmo->limit = hmo->unscheduled;                      //limit这个版本目前就是unscheduled_bytes
 	hmo->priority = 0;                                        //优先级暂时设置为 0
-    printk(KERN_NOTICE "dst: %p ref count: %d (before)\n", dst,  dst->__refcnt.counter);
+
 
     //将msg中的data拷贝到socket buffer
-    if (likely(len <= HOMA_MAX_DATA_PER_PACKET)) { //当只用放在一个skb中
-        struct full_message_header *h;              //初始化一个full message类型的package
+    if (unlikely(len > HOMA_MAX_MESSAGE_LENGTH)) {
+        return -EINVAL;
+    }
+    for (bytes_left = len, last_link = &hmo->packets; bytes_left > 0; bytes_left -= HOMA_MAX_DATA_PER_PACKET) {
+        struct data_header *h;
+        __u32 cur_size = HOMA_MAX_DATA_PER_PACKET;
+        if (likely(cur_size > bytes_left)) {
+            cur_size = bytes_left;
+        }
         skb = alloc_skb(HOMA_SKB_SIZE, GFP_KERNEL);
         if (unlikely(!skb)) {
             return -ENOMEM;
         }
-        skb_reserve(skb, HOMA_SKB_RESERVE);         //skb_reserve头部空间用来给ipv4和以太网用
-        skb_reset_transport_header(skb);            //skb->transport_header = skb->data - skb->head
-        h = (struct full_message_header *) skb_put(skb, sizeof(*h)); //把传输层的头部full_message_header put进去
-        h->common.rpc_id = id;                      //一系列的full_message_header初始化
-        h->common.type = FULL_MESSAGE;
-        h->common.direction = direction;
-        h->message_length = htons(hmo->length);     //hmo->length刚被赋予成了msg总长度
-        err = skb_add_data_nocache(sk, skb, &msg->msg_iter,hmo->length); //还是熟悉的skb_add_data_nocache直接把值给拷贝了
-        if (err != 0) {
+        skb_reserve(skb, HOMA_SKB_RESERVE);
+        skb_reset_transport_header(skb);
+        h = (struct data_header *) skb_put(skb, sizeof(*h));
+        h->common.sport = htons(sport);
+        h->common.dport = htons(dest->dport);
+        h->common.id = id;
+        h->common.type = DATA;
+        h->message_length = htonl(hmo->length);
+        h->offset = htonl(hmo->length - bytes_left);
+        h->unscheduled = htonl(hmo->unscheduled);
+        h->retransmit = 0;
+        err = skb_add_data_nocache(sk, skb, &msg->msg_iter,
+                                   cur_size);
+        if (unlikely(err != 0)) {
             return err;
         }
-        dst_hold(dst);
-        skb_dst_set(skb, dst);
-        *homa_next_skb(skb) = NULL;
-        hmo->packets = skb;
-    } else if (unlikely(len > HOMA_MAX_MESSAGE_LENGTH)) {
-		return -EINVAL;                                     //超过大小返回错误
-	} else {
-        struct sk_buff **last_link = &hmo->packets;
-        for (bytes_left = len; bytes_left > 0; bytes_left -= HOMA_MAX_DATA_PER_PACKET) {
-            struct message_frag_header *h;
-            __u32 cur_size = HOMA_MAX_DATA_PER_PACKET;
-            if (unlikely(cur_size > bytes_left)) {
-                cur_size = bytes_left;
-            }
-            skb = alloc_skb(HOMA_SKB_SIZE, GFP_KERNEL);
-            if (unlikely(!skb)) {
-                return -ENOMEM;
-            }
-            skb_reserve(skb, HOMA_SKB_RESERVE);
-            skb_reset_transport_header(skb);
-            h = (struct message_frag_header *) skb_put(skb,  sizeof(*h));
-            h->common.rpc_id = id;
-            h->common.type = MESSAGE_FRAG;
-            h->common.direction = direction;
-            h->message_length = htonl(hmo->length);
-            h->offset = htonl(hmo->length - bytes_left);
-            h->unscheduled_bytes = htonl(hmo->unscheduled_bytes);
-            h->retransmit = 0;
-            err = skb_add_data_nocache(sk, skb, &msg->msg_iter,
-                                       cur_size);
-            if (unlikely(err != 0)) {
-                return err;
-            }
-            dst_hold(dst);
-            skb_dst_set(skb, dst);
-            *last_link = skb;
-            last_link = homa_next_skb(skb);
-            *last_link = NULL;
-        }
+        dst_hold(dest->dst);
+        skb_dst_set(skb, dest->dst);
+        *last_link = skb;
+        last_link = homa_next_skb(skb);
+        *last_link = NULL;
     }
+    //要发送的next_packet指向最开始
     hmo->next_packet = hmo->packets;
-    printk(KERN_NOTICE "dst: %p ref count: %d (after)\n", dst,dst->__refcnt.counter);
     return 0;
 }
 
@@ -108,13 +87,18 @@ void homa_message_out_destroy(struct homa_message_out *hmo)
         kfree_skb(skb);
     }
 }
-void homa_xmit_packets(struct homa_message_out *hmo, struct sock *sk, struct flowi *fl) {
+
+void homa_xmit_packets(struct homa_message_out *hmo, struct sock *sk,
+                       struct homa_addr *dest)
+{
     while ((hmo->next_offset < hmo->limit) && hmo->next_packet) {
         int err;
         skb_get(hmo->next_packet);
-        err = ip_queue_xmit(sk, hmo->next_packet, fl);
+        err = ip_queue_xmit(sk, hmo->next_packet, &dest->flow);
         if (err) {
-            printk(KERN_WARNING "ip_queue_xmit failed in homa_xmit_packets: %d", err);
+            printk(KERN_WARNING
+            "ip_queue_xmit failed in homa_xmit_packets: %d",
+                    err);
         }
         hmo->next_packet = *homa_next_skb(hmo->next_packet);
         hmo->next_offset += HOMA_MAX_DATA_PER_PACKET;
