@@ -24,7 +24,6 @@ int homa_addr_init(struct homa_addr *addr, struct sock *sk, __be32 saddr,
     return 0;
 }
 
-
 //=======================iterate find===============
 //用来从homa全局变量中用port遍历找到一个homa socket
 struct homa_sock *homa_find_socket(struct homa *homa, __u16 port) {

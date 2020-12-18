@@ -257,6 +257,7 @@ int homa_sock_init(struct sock *sk)
     list_add(&hsk->socket_links, &homa.sockets);
     INIT_LIST_HEAD(&hsk->client_rpcs);
     INIT_LIST_HEAD(&hsk->server_rpcs);
+    INIT_LIST_HEAD(&hsk->ready_server_rpcs);
     printk(KERN_NOTICE "[hsk init]opened socket %d\n", hsk->client_port);
     return 0;
 }
@@ -305,9 +306,11 @@ int homa_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
     }
 
     //分配一个crpc size的内存给crpc
+    lock_sock(sk);
     crpc = (struct homa_client_rpc *) kmalloc(sizeof(*crpc), GFP_KERNEL);
 	if (unlikely(!crpc)) {
-		return -ENOMEM;
+        err = -ENOMEM;
+        goto error;
 	}
     crpc->id = hsk->next_outgoing_id; //给crpc分配id,并且homa_socket的next_outgoing_id自增
     hsk->next_outgoing_id++;
@@ -325,12 +328,14 @@ int homa_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
         goto error;
     }
     homa_xmit_packets(&crpc->request, sk, &crpc->dest);
+    release_sock(sk);
     return len;
 
 error:
 	if (crpc) {
 		homa_client_rpc_destroy(crpc);
 	}
+    release_sock(sk);
 	return err;
 }
 
@@ -338,12 +343,38 @@ error:
  * homa_recvmsg(): receive a message from a Homa socket.
  * @return: 0 on success, otherwise a negative errno.
  */
-int homa_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
-                 int noblock, int flags, int *addr_len)
+int homa_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int noblock, int flags, int *addr_len)
 {
-    printk(KERN_WARNING
-           "unimplemented recvmsg invoked on Homa socket\n");
-    return -ENOSYS;
+    DECLARE_SOCKADDR(struct sockaddr_in *, sin, msg->msg_name);
+    struct homa_sock *hsk = homa_sk(sk);
+    struct homa_message_in *msgin;
+    int count;
+
+    printk(KERN_NOTICE "[homa_recvmsg]Entering homa_recvmsg\n");
+    while (1) {
+        if (!list_empty(&hsk->ready_server_rpcs)) {
+            struct homa_server_rpc *srpc;
+            srpc = list_first_entry(&hsk->ready_server_rpcs,
+            struct homa_server_rpc, ready_links);
+            printk(KERN_NOTICE "[homa_recvmsg]srpc: %p;srpc->next: %p, srpc->prev: %p\n", srpc,srpc->ready_links.next, srpc->ready_links.prev);
+            list_del(&srpc->ready_links);
+            srpc->state = IN_SERVICE;
+            msgin = &srpc->request;
+            if (sin) {
+                sin->sin_family = AF_INET;
+                sin->sin_port = htons(srpc->sport);
+                sin->sin_addr.s_addr = srpc->saddr;
+                memset(sin->sin_zero, 0, sizeof(sin->sin_zero));
+                *addr_len = sizeof(*sin);
+            }
+            break;
+        }
+        printk(KERN_NOTICE "[homa_recvmsg]Leaving homa_recvmsg with EAGAIN\n");
+        return -EAGAIN;
+    }
+    count =  homa_message_in_copy_data(msgin, msg, len);  //拷贝到用户空间
+    printk(KERN_NOTICE "[homa_recvmsg]Leaving homa_recvmsg normally\n");
+    return count;
 }
 
 /**
@@ -456,9 +487,6 @@ int homa_handler(struct sk_buff *skb) {
     dport = htons(h->dport);
     hsk = homa_find_socket(&homa, dport);
     if (!hsk) {
-        /* Eventually should return an error result to sender if
-         * it is a client.
-         */
         printk(KERN_WARNING "[homa_hsk]Homa packet from %pI4 sent to unknown port %u\n", &saddr, dport);
         goto discard;
     }
