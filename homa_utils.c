@@ -3,6 +3,20 @@
 #include "homa_impl.h"
 
 
+//用来从homa全局变量中用port遍历找到一个homa socket
+struct homa_sock *homa_find_socket(struct homa *homa, __u32 port)
+{
+    struct list_head *pos;
+    list_for_each(pos, &homa->sockets) {
+        struct homa_sock *hsk = list_entry(pos, struct homa_sock,
+        socket_links);
+        if ((hsk->client_port == port) || (hsk->server_port == port)) {
+            return hsk;
+        }
+    }
+    return NULL;
+}
+
 char *homa_symbol_for_type(uint8_t type)
 {
 	static char buffer[20];
@@ -44,7 +58,7 @@ char *homa_print_header(char *packet, char *buffer, int length)
 	int space_left = length;
 	struct common_header *common = (struct common_header *) packet;
 	
-	int result = snprintf(pos, space_left, "%s %s id %u.%llu",
+	int result = snprintf(pos, space_left, "package type:%s from:%s port:%u rpcId:%llu",
 		homa_symbol_for_type(common->type),
 		(common->direction == FROM_CLIENT) ? "FROM_CLIENT"
 					           : "FROM_SERVER",

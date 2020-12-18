@@ -49,14 +49,12 @@ struct homa
 };
 
 //homa_packet_type 枚举 :每种的header都不同
-enum homa_packet_type
-{
-    FULL_MESSAGE = 20,
-    MESSAGE_FRAG = 21,
-    GRANT = 22,
-    RESEND = 23,
-    BUSY = 24,
-    BOGUS = 25, /*  unit tests 中使用 */
+enum homa_packet_type {
+    DATA               = 20,
+    GRANT              = 21,
+    RESEND             = 22,
+    BUSY               = 23,
+    BOGUS              = 24, /*  unit tests 中使用 */
     /* If you add a new type here, you must also do the following:
      * 1. Change BOGUS so it is the highest opcode
      * 2. Add support for the new opcode in op_symbol and header_to_string
@@ -173,60 +171,32 @@ static inline struct sk_buff **homa_next_skb(struct sk_buff *skb)
 }
 
 //======================================
-
-extern void homa_client_rpc_destroy(struct homa_client_rpc *crpc);
-extern void homa_message_out_destroy(struct homa_message_out *hmo);
-extern int homa_message_out_init(struct homa_message_out *hmo, struct sock *sk,
-                                 struct rpc_id id, __u8 direction, struct msghdr *msg,
-                                 size_t len, struct dst_entry *dst);
-extern char *homa_print_header(char *packet, char *buffer, int length);
-extern void homa_xmit_packets(struct homa_message_out *hmo, struct sock *sk,
-                              struct flowi *fl);
-
-//================== 一些声明 ==========================
-//[homa_prot]proto 结构的一些实现
-extern int homa_sock_init(struct sock *sk);
-
-extern void homa_close(struct sock *sk, long timeout);
-
-extern int homa_diag_destroy(struct sock *sk, int err);
-
-extern int homa_disconnect(struct sock *sk, int flags);
-
-extern int homa_get_port(struct sock *sk, unsigned short snum);
-
-extern int homa_getsockopt(struct sock *sk, int level, int optname, char __user
-
-                                                                        *optval,
-                           int __user
-                               *option);
-
-extern int homa_hash(struct sock *sk);
-
-extern int homa_setsockopt(struct sock *sk, int level, int optname, char __user *optval, unsigned int optlen);
-
-extern int homa_init_sock(struct sock *sk);
-
-extern int homa_ioctl(struct sock *sk, int cmd, unsigned long arg);
-
-extern int homa_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int noblock, int flags, int *addr_len);
-
-extern void homa_rehash(struct sock *sk);
-
-extern int homa_sendmsg(struct sock *sk, struct msghdr *msg, size_t len);
-
-extern int homa_sendpage(struct sock *sk, struct page *page, int offset, size_t size, int flags);
-
-extern void homa_unhash(struct sock *sk);
-
-//[homa_protocol]net_protocol 结构的一些实现
-extern void homa_err_handler(struct sk_buff *skb, u32 info);
-
-extern int homa_handler(struct sk_buff *skb);
-
-extern int homa_v4_early_demux(struct sk_buff *skb);
-
-extern int homa_v4_early_demux_handler(struct sk_buff *skb);
-
-//[homa_proto_ops]proto_ops 结构的一些实现
+extern int    homa_bind(struct socket *sk, struct sockaddr *addr, int addr_len);
+extern void   homa_client_rpc_destroy(struct homa_client_rpc *crpc);
+extern void   homa_close(struct sock *sock, long timeout);
+extern int    homa_diag_destroy(struct sock *sk, int err);
+extern int    homa_disconnect(struct sock *sk, int flags);
+extern void   homa_err_handler(struct sk_buff *skb, u32 info);
+extern struct homa_sock *homa_find_socket(struct homa *homa, __u32 port);
+extern int    homa_get_port(struct sock *sk, unsigned short snum);
+extern int    homa_getsockopt(struct sock *sk, int level, int optname, char __user *optval, int __user *option);
+extern int    homa_handler(struct sk_buff *skb);
+extern int    homa_hash(struct sock *sk);
+extern int    homa_setsockopt(struct sock *sk, int level, int optname, char __user *optval, unsigned int optlen);
+extern int    homa_ioctl(struct sock *sk, int cmd, unsigned long arg);
+extern void   homa_message_out_destroy(struct homa_message_out *hmo);
+extern int    homa_message_out_init(struct homa_message_out *hmo,
+                                    struct sock *sk, struct rpc_id id, __u8 direction,
+                                    struct msghdr *msg, size_t len, struct dst_entry *dst);
 extern __poll_t homa_poll(struct file *file, struct socket *sock, struct poll_table_struct *wait);
+extern char  *homa_print_header(char *packet, char *buffer, int length);
+extern int    homa_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int noblock, int flags, int *addr_len);
+extern void   homa_rehash(struct sock *sk);
+extern int    homa_sendmsg(struct sock *sk, struct msghdr *msg, size_t len);
+extern int    homa_sendpage(struct sock *sk, struct page *page, int offset, size_t size, int flags);
+extern int    homa_sock_init(struct sock *sk);
+extern char  *homa_symbol_for_type(uint8_t type);
+extern void   homa_unhash(struct sock *sk);
+extern int    homa_v4_early_demux(struct sk_buff *skb);
+extern int    homa_v4_early_demux_handler(struct sk_buff *skb);
+extern void   homa_xmit_packets(struct homa_message_out *hmo, struct sock *sk, struct flowi *fl);

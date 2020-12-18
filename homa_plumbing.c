@@ -32,7 +32,7 @@ const struct proto_ops homa_proto_ops = {
     .family = PF_INET,
     .owner = THIS_MODULE,
     .release = inet_release,
-    .bind = inet_bind,
+    .bind = homa_bind,
     .connect = inet_dgram_connect,
     .socketpair = sock_no_socketpair,
     .accept = sock_no_accept,
@@ -157,9 +157,38 @@ homa_exit(void)
 
 module_init(homa_init);
 module_exit(homa_exit);
+/**
+* homa_bind（）-为Homa套接字实现bind系统调用;与其他AF_INET协议不同，仅用于一个client
+*/
+int homa_bind(struct socket *sock, struct sockaddr *addr, int addr_len) {
+    struct homa_sock *hsk = homa_sk(sock->sk);
+    struct homa_sock *owner;
+    struct sockaddr_in *addr_in = (struct sockaddr_in *) addr;
+    __u32 port;
+
+    if (addr_len < sizeof(*addr_in)) {
+        return -EINVAL;
+    }
+    if (addr_in->sin_family != AF_INET) {
+        return -EAFNOSUPPORT;
+    }
+    port = ntohs(addr_in->sin_port);
+    if (port == 0) {
+        return -EINVAL;
+    }
+    //找到对应的port所在的socket,将对应传入的port绑定到socket
+    owner = homa_find_socket(&homa, port);
+    if ((owner != NULL) && (owner != hsk)) {
+        return -EADDRINUSE;
+    }
+    hsk->server_port = port;
+    return 0;
+}
 
 void homa_client_rpc_destroy(struct homa_client_rpc *crpc) {
+    printk(KERN_NOTICE "dst release: %p ref count: %d (release before)\n", crpc->dst,crpc->dst->__refcnt.counter);
     dst_release(crpc->dst);
+    printk(KERN_NOTICE "dst release: %p ref count: %d (release after)\n", crpc->dst,crpc->dst->__refcnt.counter);
     __list_del_entry(&crpc->client_rpcs_links);
     homa_message_out_destroy(&crpc->request);
 }
@@ -296,7 +325,9 @@ int homa_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 		goto error;
 	}
     //发送数据
+    printk(KERN_NOTICE "dst send: %p ref count: %d (send before)\n", crpc->dst,crpc->dst->__refcnt.counter);
     homa_xmit_packets(&crpc->request, sk, &crpc->fl);
+    printk(KERN_NOTICE "dst send: %p ref count: %d (send after)\n", crpc->dst,crpc->dst->__refcnt.counter);
 	return len;
 
 error:
