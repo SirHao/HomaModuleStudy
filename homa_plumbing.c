@@ -186,9 +186,7 @@ int homa_bind(struct socket *sock, struct sockaddr *addr, int addr_len) {
 }
 
 //proto的一些需要自定义的接口
-// homa_close()
 //invoked when close system call is invoked on a Homa socket.
-
 void homa_close(struct sock *sk, long timeout)
 {
     struct homa_sock *hsk = homa_sk(sk);                        //获取到homa socket 结构体
@@ -341,6 +339,7 @@ error:
 
 /**
  * homa_recvmsg(): receive a message from a Homa socket.
+ * @Non-zero:非0表示设置了阻塞等待时间
  * @return: 0 on success, otherwise a negative errno.
  */
 int homa_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int noblock, int flags, int *addr_len)
@@ -349,6 +348,7 @@ int homa_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int noblock, i
     struct homa_sock *hsk = homa_sk(sk);
     struct homa_message_in *msgin;
     int count;
+    long timeo;
 
     printk(KERN_NOTICE "[homa_recvmsg]Entering homa_recvmsg\n");
     while (1) {
@@ -369,12 +369,40 @@ int homa_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int noblock, i
             }
             break;
         }
-        printk(KERN_NOTICE "[homa_recvmsg]Leaving homa_recvmsg with EAGAIN\n");
-        return -EAGAIN;
+        if (noblock) {
+            return -EAGAIN;
+        }
+        timeo = sock_rcvtimeo(sk, noblock);
+        timeo = homa_wait_ready_msg(sk, &timeo);
+        if (signal_pending(current)) {
+            printk("Aborting recvmsg because of errno %d\n",
+                   -sock_intr_errno(timeo));
+            return sock_intr_errno(timeo);
+        }
+        printk(KERN_NOTICE "Woke up, trying again\n");
     }
     count =  homa_message_in_copy_data(msgin, msg, len);  //拷贝到用户空间
     printk(KERN_NOTICE "[homa_recvmsg]Leaving homa_recvmsg normally\n");
     return count;
+}
+
+/**
+    * homa_wait_ready_msg（）-等待直到至少有一条完整的消息准备服务。
+    * @sk：消息将到达的Homa套接字。
+    * @timeo：最长等待时间； 修改后返回保留等待剩余时间。
+    *返回：零或负的errno值返回到应用程序。
+*/
+int homa_wait_ready_msg(struct sock *sk, long *timeo)
+{
+    DEFINE_WAIT_FUNC(wait, woken_wake_function);                                        //初始化一个wait_queue_t类型变量wait ，包含func:woken_wake_function
+    int rc;
+    //sk_sleep:wait_queue_head_t类型的字段 sk_sleep 用来表示在这个 sock 上等待事件发生
+    add_wait_queue(sk_sleep(sk), &wait);                                                //把sk的等待队列赋给wait
+    sk_set_bit(SOCKWQ_ASYNC_WAITDATA, sk);
+    rc = sk_wait_event(sk, timeo, !list_empty(&homa_sk(sk)->ready_server_rpcs), &wait); //该函数调用schedule_timeout进入睡眠，其进一步调用了schedule函数，首先从运行队列删除，其次加入到等待队列
+    sk_clear_bit(SOCKWQ_ASYNC_WAITDATA, sk);
+    remove_wait_queue(sk_sleep(sk), &wait);                                             //移除等待队列
+    return rc;
 }
 
 /**
