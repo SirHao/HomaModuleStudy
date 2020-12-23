@@ -22,8 +22,8 @@ int homa_message_out_init(struct homa_message_out *msgout, struct sock *sk,
     int bytes_left;
     struct sk_buff *skb;
     int err;
+    //初始化一个homa_msg_out
     struct sk_buff **last_link = &msgout->packets;
-	
 	msgout->length = len;                                        //初始化hmo的总长度为 msglen
     msgout->packets = NULL;                                      //头结点初始化函数
     msgout->next_packet = NULL;
@@ -33,7 +33,7 @@ int homa_message_out_init(struct homa_message_out *msgout, struct sock *sk,
 	msgout->priority = 0;                                        //优先级暂时设置为 0
 
 
-    //将msg中的data拷贝到socket buffer
+    //将msg中的data拷贝到socket buffer并放入homa_msg_out
     if (unlikely(len > HOMA_MAX_MESSAGE_LENGTH)) {
         return -EINVAL;
     }

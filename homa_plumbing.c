@@ -294,9 +294,9 @@ int homa_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
     //原来有个:flowi在某种程度上类似于访问控制列表(ACL):它根据所选L3和L4头字段的值(如IP地址、L4端口号等)定义流量的聚合。例如，它被用作路由查找的搜索键。
 
     int err = 0;
-    struct homa_client_rpc *crpc = NULL;
+    struct homa_client_rpc *crpc = NULL;                               //初始化一个client rpc
 
-    DECLARE_SOCKADDR(struct sockaddr_in *, dest_in, msg->msg_name);
+    DECLARE_SOCKADDR(struct sockaddr_in *, dest_in, msg->msg_name);    //初始化一个sockaddr_in类型的dest_in,并由msg->msg_name赋值
     if (msg->msg_namelen < sizeof(*dest_in))
         return -EINVAL;
     if (dest_in->sin_family != AF_INET) {
@@ -310,10 +310,10 @@ int homa_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
         err = -ENOMEM;
         goto error;
 	}
-    crpc->id = hsk->next_outgoing_id; //给crpc分配id,并且homa_socket的next_outgoing_id自增
+    crpc->id = hsk->next_outgoing_id;                                  //给crpc分配id,并且homa_socket的next_outgoing_id自增
     hsk->next_outgoing_id++;
     list_add(&crpc->client_rpc_links, &hsk->client_rpcs);              //将crpc加入hsk的client_rpcs list中
-    err = homa_addr_init(&crpc->dest, sk, inet->inet_saddr,             //
+    err = homa_addr_init(&crpc->dest, sk, inet->inet_saddr,            //将crpc的homa_addr绑定路由
                          hsk->client_port, dest_in->sin_addr.s_addr,
                          ntohs(dest_in->sin_port));
     if (unlikely(err != 0)) {
@@ -375,8 +375,7 @@ int homa_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int noblock, i
         timeo = sock_rcvtimeo(sk, noblock);
         timeo = homa_wait_ready_msg(sk, &timeo);
         if (signal_pending(current)) {
-            printk("Aborting recvmsg because of errno %d\n",
-                   -sock_intr_errno(timeo));
+            printk("Aborting recvmsg because of errno %d\n", -sock_intr_errno(timeo));
             return sock_intr_errno(timeo);
         }
         printk(KERN_NOTICE "Woke up, trying again\n");
