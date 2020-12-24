@@ -9,7 +9,7 @@
 #include <net/inet_common.h>
 typedef unsigned __poll_t;
 
-#include "homa.h"
+#include "tests/homa.h"
 
 //一个包包含的最大数据量(不包含Homa's header, IP header等）；这假设以太网分组帧。
 #define HOMA_MAX_DATA_PER_PACKET 1400

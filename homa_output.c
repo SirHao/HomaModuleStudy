@@ -58,7 +58,7 @@ int homa_message_out_init(struct homa_message_out *msgout, struct sock *sk,
         h->offset = htonl(msgout->length - bytes_left);
         h->unscheduled = htonl(msgout->unscheduled);
         h->retransmit = 0;
-        err = err = skb_add_data_nocache(sk, skb, iter, cur_size);
+        err = skb_add_data_nocache(sk, skb, iter, cur_size);
         if (unlikely(err != 0)) {
             return err;
         }

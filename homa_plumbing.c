@@ -221,26 +221,7 @@ int homa_disconnect(struct sock *sk, int flags)
     return -ENOSYS;
 }
 
-/**
- * homa_ioctl(): implements the ioctl system call for Homa sockets.
- * @return: 0 on success, otherwise a negative errno.
- */
-int homa_ioctl(struct sock *sk, int cmd, unsigned long arg)
-{
-    switch (cmd) {
-        case HOMAIOCSEND:
-            return homa_ioc_send(sk, arg);
-        case HOMAIOCRECV:
-            return homa_ioc_recv(sk, arg);
-        case HOMAIOCINVOKE:
-        case HOMAIOCREPLY:
-        case HOMAIOCABORT:
-        default:
-            printk(KERN_NOTICE "[homa_ioctl] Unknown Homa ioctl: %d\n", cmd);
-            return -EINVAL;
-    }
-    return -EINVAL;
-}
+
 
 /**
  * homa_init_sock(): invoked to initialize a new Homa socket.
@@ -595,6 +576,27 @@ int homa_handler(struct sk_buff *skb) {
     discard:
     kfree_skb(skb);
     return 0;
+}
+
+/**
+ * homa_ioctl(): implements the ioctl system call for Homa sockets.
+ * @return: 0 on success, otherwise a negative errno.
+ */
+int homa_ioctl(struct sock *sk, int cmd, unsigned long arg)
+{
+    switch (cmd) {
+        case HOMAIOCSEND:
+            return homa_ioc_send(sk, arg);
+        case HOMAIOCRECV:
+            return homa_ioc_recv(sk, arg);
+        case HOMAIOCINVOKE:
+        case HOMAIOCREPLY:
+        case HOMAIOCABORT:
+        default:
+            printk(KERN_NOTICE "[homa_ioctl] Unknown Homa ioctl: %d\n", cmd);
+            return -EINVAL;
+    }
+    return -EINVAL;
 }
 
 /**
