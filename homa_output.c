@@ -9,14 +9,14 @@
  * @sk:        发送数据需要的socket sk
  * @id:        crpc的ID
  * @direction: 来自客户端还是服务端；FROM_CLIENT or FROM_SERVER.
- * @msg:       用户空间的msg结构体
+ * @iter:      用户空间的buffer
  * @len:       msg数据长度
  * @dst:       rt获取到的dst
  * 
  * Return:   0 :success;     a negative: errno value.
  */
 int homa_message_out_init(struct homa_message_out *msgout, struct sock *sk,
-                          struct msghdr *msg, size_t len, struct homa_addr *dest,
+                          struct iov_iter *iter, size_t len, struct homa_addr *dest,
                           __u16 sport, __u64 id)
 {
     int bytes_left;
@@ -58,8 +58,7 @@ int homa_message_out_init(struct homa_message_out *msgout, struct sock *sk,
         h->offset = htonl(msgout->length - bytes_left);
         h->unscheduled = htonl(msgout->unscheduled);
         h->retransmit = 0;
-        err = skb_add_data_nocache(sk, skb, &msg->msg_iter,
-                                   cur_size);
+        err = err = skb_add_data_nocache(sk, skb, iter, cur_size);
         if (unlikely(err != 0)) {
             return err;
         }

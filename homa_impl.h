@@ -9,10 +9,8 @@
 #include <net/inet_common.h>
 typedef unsigned __poll_t;
 
-// IP协议空间内的Homa协议号
-#define IPPROTO_HOMA 140
-// 最大消息长度——不知道怎么定的
-#define HOMA_MAX_MESSAGE_LENGTH 1000000
+#include "homa.h"
+
 //一个包包含的最大数据量(不包含Homa's header, IP header等）；这假设以太网分组帧。
 #define HOMA_MAX_DATA_PER_PACKET 1400
 //最大的 IP header (V4) size
@@ -25,8 +23,7 @@ _Static_assert(1500 >= (HOMA_MAX_DATA_PER_PACKET + HOMA_MAX_IPV4_HEADER + HOMA_M
 #define HOMA_SKB_RESERVE (HOMA_MAX_IPV4_HEADER + 20)
 // all Homa packet buffers的总大小 "sizeof(void*)" 用来指向homa_next_skb
 #define HOMA_SKB_SIZE (HOMA_MAX_DATA_PER_PACKET + HOMA_MAX_HEADER + HOMA_SKB_RESERVE + sizeof(void*))
-//16位端口空间分为两个非重叠区域。 端口1-32767专为定义明确的服务器端口保留。 其余端口用于客户端端口；其余端口用于客户端端口。 这些由Homa自动分配。 端口0被保留。
-#define HOMA_MIN_CLIENT_PORT 0x8000
+
 
 //===================结构体，变量================
 extern struct homa homa;
@@ -213,15 +210,16 @@ extern int    homa_getsockopt(struct sock *sk, int level, int optname,
                               char __user *optval, int __user *option);
 extern int    homa_handler(struct sk_buff *skb);
 extern int    homa_hash(struct sock *sk);
+extern int    homa_ioc_send(struct sock *sk, unsigned long arg);
 extern int    homa_ioctl(struct sock *sk, int cmd, unsigned long arg);
 extern int    homa_message_in_copy_data(struct homa_message_in *hmi,
-                                        struct msghdr *msg, int max_bytes);
+                                        struct iov_iter *iter, int max_bytes);
 extern void   homa_message_in_destroy(struct homa_message_in *hmi);
 extern void   homa_message_in_init(struct homa_message_in *hmi, int length,
                                    int unscheduled);
 extern void   homa_message_out_destroy(struct homa_message_out *hmo);
 extern int    homa_message_out_init(struct homa_message_out *hmo,
-                                    struct sock *sk, struct msghdr *msg, size_t len,
+                                    struct sock *sk, struct iov_iter *iter, size_t len,
                                     struct homa_addr *dest, __u16 sport, __u64 id);
 extern __poll_t
 homa_poll(struct file *file, struct socket *sock,

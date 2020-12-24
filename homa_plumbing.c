@@ -227,8 +227,18 @@ int homa_disconnect(struct sock *sk, int flags)
  */
 int homa_ioctl(struct sock *sk, int cmd, unsigned long arg)
 {
-    printk(KERN_WARNING
-           "unimplemented ioctl invoked on Homa socket\n");
+    switch (cmd) {
+        case HOMAIOCSEND:
+            return homa_ioc_send(sk, arg);
+        case HOMAIOCRECV:
+            return homa_ioc_recv(sk, arg);
+        case HOMAIOCINVOKE:
+        case HOMAIOCREPLY:
+        case HOMAIOCABORT:
+        default:
+            printk(KERN_NOTICE "[homa_ioctl] Unknown Homa ioctl: %d\n", cmd);
+            return -EINVAL;
+    }
     return -EINVAL;
 }
 
@@ -286,55 +296,8 @@ int homa_getsockopt(struct sock *sk, int level, int optname, char __user *optval
  * homa_sendmsg(): send a message on a Homa socket.
  * @return: 0 on success, otherwise a negative errno.
  */
-int homa_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
-{
-    struct inet_sock *inet = inet_sk(sk);
-    struct homa_sock *hsk = homa_sk(sk);
-
-    //原来有个:flowi在某种程度上类似于访问控制列表(ACL):它根据所选L3和L4头字段的值(如IP地址、L4端口号等)定义流量的聚合。例如，它被用作路由查找的搜索键。
-
-    int err = 0;
-    struct homa_client_rpc *crpc = NULL;                               //初始化一个client rpc
-
-    DECLARE_SOCKADDR(struct sockaddr_in *, dest_in, msg->msg_name);    //初始化一个sockaddr_in类型的dest_in,并由msg->msg_name赋值
-    if (msg->msg_namelen < sizeof(*dest_in))
-        return -EINVAL;
-    if (dest_in->sin_family != AF_INET) {
-        return -EAFNOSUPPORT;
-    }
-
-    //分配一个crpc size的内存给crpc
-    lock_sock(sk);
-    crpc = (struct homa_client_rpc *) kmalloc(sizeof(*crpc), GFP_KERNEL);
-	if (unlikely(!crpc)) {
-        err = -ENOMEM;
-        goto error;
-	}
-    crpc->id = hsk->next_outgoing_id;                                  //给crpc分配id,并且homa_socket的next_outgoing_id自增
-    hsk->next_outgoing_id++;
-    list_add(&crpc->client_rpc_links, &hsk->client_rpcs);              //将crpc加入hsk的client_rpcs list中
-    err = homa_addr_init(&crpc->dest, sk, inet->inet_saddr,            //将crpc的homa_addr绑定路由
-                         hsk->client_port, dest_in->sin_addr.s_addr,
-                         ntohs(dest_in->sin_port));
-    if (unlikely(err != 0)) {
-        goto error;
-    }
-
-    err = homa_message_out_init(&crpc->request, sk, msg, len,
-                                &crpc->dest, hsk->client_port, crpc->id);
-    if (unlikely(err != 0)) {
-        goto error;
-    }
-    homa_xmit_packets(&crpc->request, sk, &crpc->dest);
-    release_sock(sk);
-    return len;
-
-error:
-	if (crpc) {
-		homa_client_rpc_destroy(crpc);
-	}
-    release_sock(sk);
-	return err;
+int homa_sendmsg(struct sock *sk, struct msghdr *msg, size_t len){
+    return -EINVAL;
 }
 
 /**
@@ -342,31 +305,119 @@ error:
  * @Non-zero:非0表示设置了阻塞等待时间
  * @return: 0 on success, otherwise a negative errno.
  */
-int homa_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int noblock, int flags, int *addr_len)
-{
-    DECLARE_SOCKADDR(struct sockaddr_in *, sin, msg->msg_name);
-    struct homa_sock *hsk = homa_sk(sk);
-    struct homa_message_in *msgin;
-    int count;
-    long timeo;
+int homa_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int noblock, int flags, int *addr_len) {
+    return -EINVAL;
+}
 
-    printk(KERN_NOTICE "[homa_recvmsg]Entering homa_recvmsg\n");
+/*!
+ * ioctl来发消息的核心逻辑
+ * @param sk 发送用的sk
+ * @param arg user-space传入的arg
+ * @return 0:success, otherwise:errno.
+ */
+int homa_ioc_send(struct sock *sk, unsigned long arg) {
+    struct inet_sock *inet = inet_sk(sk);
+    struct homa_sock *hsk = homa_sk(sk);
+    struct homa_args_send_ipv4 args;
+    struct homa_client_rpc *crpc = NULL;
+
+    struct iovec iov;
+    struct iov_iter iter;
+    int err;
+
+    //从用户空间拷贝arg的参数，拷贝的是source_addr的信息
+    //第三个参数是预计拷贝的字节数，这里就是拷贝所有的用户参数 buf len address
+    if (unlikely(copy_from_user(&args, (void *) arg, sizeof(args))))
+        return -EFAULT;
+    //用户用于发送msg buffer的地址和长度 存到 iov 、iter 中
+    err = import_single_range(WRITE, args.request, args.reqlen, &iov, &iter);
+    if (unlikely(err))
+        return err;
+
+    if (unlikely(args.dest_addr.sin_family != AF_INET))
+        return -EAFNOSUPPORT;
+
+    lock_sock(sk);      //加个锁
+    crpc = (struct homa_client_rpc *) kmalloc(sizeof(*crpc), GFP_KERNEL);//创建一个client prc
+    if (unlikely(!crpc)) {
+        err = -ENOMEM;
+        goto error;
+    }
+
+    crpc->id = hsk->next_outgoing_id;   //crpc被分配id
+    hsk->next_outgoing_id++;            //这个socket的next id被自增
+    list_add(&crpc->client_rpc_links, &hsk->client_rpcs);
+
+    err = homa_addr_init(&crpc->dest, sk, inet->inet_saddr,
+                         hsk->client_port, args.dest_addr.sin_addr.s_addr,
+                         ntohs(args.dest_addr.sin_port));
+    if (unlikely(err != 0)) {
+        goto error;
+    }
+
+    err = homa_message_out_init(&crpc->request, sk, &iter, args.reqlen,
+                                &crpc->dest, hsk->client_port, crpc->id);
+    if (unlikely(err != 0)) {
+        goto error;
+    }
+    homa_xmit_packets(&crpc->request, sk, &crpc->dest);
+    if (unlikely(copy_to_user(&((struct homa_args_send_ipv4 *) arg)->id,
+                              &crpc->id, sizeof(crpc->id))))
+        return -EFAULT;
+    release_sock(sk);
+    return 0;
+
+    error:
+    if (crpc) {
+        homa_client_rpc_destroy(crpc);
+    }
+    release_sock(sk);
+    return err;
+}
+
+/*!
+ * ioctl来收消息的核心逻辑
+ * @param sk 接收的sk
+ * @param arg 用来给user-space返回值的arg
+ * @return 0:success 否则:error
+ */
+int homa_ioc_recv(struct sock *sk, unsigned long arg) {
+    struct homa_sock *hsk = homa_sk(sk);
+    struct homa_args_recv_ipv4 args;
+    struct homa_message_in *msgin;
+
+    struct iovec iov;
+    struct iov_iter iter;
+
+    int err;
+    long timeo;
+    int noblock = 0;
+    int result;
+
+    //从用户空间拷贝arg的参数，拷贝的是source_addr的信息
+    //第三个参数是预计拷贝的字节数，这里就是拷贝地址结构体之前的值(也就是下一个函数import_single_range用到的buf和len)
+    if (unlikely(copy_from_user(&args, (void *) arg, offsetof(struct homa_args_recv_ipv4, source_addr))))
+        return -EFAULT;
+    //用户用于接收msg的地址和期望长度 存到 iov 、iter 中
+    err = import_single_range(READ, args.buf, args.len, &iov, &iter);
+    if (unlikely(err))
+        return err;
+
+    //开始循环接收
     while (1) {
         if (!list_empty(&hsk->ready_server_rpcs)) {
             struct homa_server_rpc *srpc;
             srpc = list_first_entry(&hsk->ready_server_rpcs,
             struct homa_server_rpc, ready_links);
-            printk(KERN_NOTICE "[homa_recvmsg]srpc: %p;srpc->next: %p, srpc->prev: %p\n", srpc,srpc->ready_links.next, srpc->ready_links.prev);
             list_del(&srpc->ready_links);
             srpc->state = IN_SERVICE;
             msgin = &srpc->request;
-            if (sin) {
-                sin->sin_family = AF_INET;
-                sin->sin_port = htons(srpc->sport);
-                sin->sin_addr.s_addr = srpc->saddr;
-                memset(sin->sin_zero, 0, sizeof(sin->sin_zero));
-                *addr_len = sizeof(*sin);
-            }
+            //将source host的信息copy到args
+            args.source_addr.sin_family = AF_INET;
+            args.source_addr.sin_port = htons(srpc->sport);
+            args.source_addr.sin_addr.s_addr = srpc->saddr;
+            memset(args.source_addr.sin_zero, 0, sizeof(args.source_addr.sin_zero));
+            args.id = srpc->id;
             break;
         }
         if (noblock) {
@@ -375,16 +426,24 @@ int homa_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int noblock, i
         timeo = sock_rcvtimeo(sk, noblock);
         timeo = homa_wait_ready_msg(sk, &timeo);
         if (signal_pending(current)) {
-            printk("Aborting recvmsg because of errno %d\n", -sock_intr_errno(timeo));
+            printk("[homa_recvmsg]Aborting homa_ioc_recv because of errno %d\n",
+                   -sock_intr_errno(timeo));
             return sock_intr_errno(timeo);
         }
-        printk(KERN_NOTICE "Woke up, trying again\n");
+        printk(KERN_NOTICE "[homa_recvmsg]Woke up, trying again\n");
     }
-    count =  homa_message_in_copy_data(msgin, msg, len);  //拷贝到用户空间
-    printk(KERN_NOTICE "[homa_recvmsg]Leaving homa_recvmsg normally\n");
-    return count;
-}
 
+    homa_message_in_copy_data(msgin, &iter, args.len);
+    result = msgin->total_length;
+    homa_message_in_destroy(msgin);
+    if (unlikely(copy_to_user(
+            &((struct homa_args_recv_ipv4 *) arg)->source_addr,
+            &args.source_addr, sizeof(args) -
+                               offsetof(struct homa_args_recv_ipv4, source_addr))))
+    return -EFAULT;
+    printk(KERN_NOTICE "[homa_recvmsg]Leaving homa_recvmsg normally\n");
+    return result;
+}
 /**
     * homa_wait_ready_msg（）-等待直到至少有一条完整的消息准备服务。
     * @sk：消息将到达的Homa套接字。
