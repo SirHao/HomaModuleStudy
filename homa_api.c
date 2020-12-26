@@ -64,3 +64,62 @@ int homa_send(int sockfd, const void *request, size_t reqlen,
     *id = args.id;
     return result;
 }
+
+
+/**
+ * homa_invoke() - 发送一个request msg并且等待response
+ * @request:    request msg的buffer首地址
+ * @reqlen:     request msg buffer len
+ * @dest_addr:  目标地址
+ * @response:   response msg的buffer首地址
+ * @resplen:    response msg buffer len
+ *
+ * Return:     incoming msg len,may larger than len
+ */
+size_t homa_invoke(int sockfd, const void *request, size_t reqlen,
+                   const struct sockaddr *dest_addr, size_t addrlen,
+                   void *response, size_t resplen)
+{
+    struct homa_args_invoke_ipv4 args;
+    int result;
+
+    if (dest_addr->sa_family != AF_INET) {
+        errno = EAFNOSUPPORT;
+        return -EAFNOSUPPORT;
+    }
+    args.request = (void *) request;
+    args.reqlen = reqlen;
+    args.dest_addr = *((struct sockaddr_in *) dest_addr);
+    args.response = response;
+    args.resplen = resplen;
+    result = ioctl(sockfd, HOMAIOCSEND, &args);
+    return result;
+}
+
+/**
+ * homa_reply() -对于发送过来的req返回一个response
+ * @response:   response msg的buffer首地址
+ * @resplen:    response msg buffer len
+ * @dest_addr:  RPC client 地址(通过homa_recv 接收消息的时候返回).
+ * @addrlen:    Size of @dest_addr in bytes.
+ * @id:         request  的 Unique identifier ,
+ *
+ * Return:      0 means the response has been accepted for delivery. A
+ *              negative value indicates an error.
+ */
+size_t homa_reply(int sockfd, const void *response, size_t resplen,
+                  const struct sockaddr *dest_addr, size_t addrlen,
+                  uint64_t id)
+{
+    struct homa_args_reply_ipv4 args;
+
+    if (dest_addr->sa_family != AF_INET) {
+        errno = EAFNOSUPPORT;
+        return -EAFNOSUPPORT;
+    }
+    args.response = (void *) response;
+    args.resplen = resplen;
+    args.dest_addr = *((struct sockaddr_in *) dest_addr);
+    args.id = id;
+    return ioctl(sockfd, HOMAIOCREPLY, &args);
+}

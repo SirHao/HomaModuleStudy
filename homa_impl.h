@@ -40,6 +40,7 @@ struct homa_sock
     struct list_head client_rpcs;        //发出这个socket上活跃的rpc list
     struct list_head server_rpcs;        //发往这个socket上活跃的rpc list
     struct list_head ready_server_rpcs;  //state=ready的server rpc
+    struct list_head ready_client_rpcs;  //state=ready的client rpc
 };
 
 //[homa] - 有关Homa协议实施的Overall information;除单元测试外，一次通常全局唯一
@@ -119,6 +120,7 @@ struct busy_header
 } __attribute__((packed));
 _Static_assert(sizeof(struct busy_header) <= HOMA_MAX_HEADER,
                "busy_header too large");
+
 //=============socket relative  struct===========
 // [homa_addr] rpcid取消，只在rpc放一个u64 id，而将一个rpc的所有peer信息放在这个结构体
 struct homa_addr {
@@ -156,23 +158,29 @@ struct homa_client_rpc
 {
     __u64  id;                          //唯一id
     struct homa_addr dest;              //rpc peer的地址信息：ip/port/路由信息等
-    struct list_head client_rpc_links; //用来将这个homa_client_rpc连接到&homa_sock.client_rpcs.
+    struct list_head client_rpc_links;  //用来将这个homa_client_rpc连接到&homa_sock.client_rpcs.
     struct homa_message_out request;    //message request信息
+    struct homa_message_in response;    //message response信息
+    enum {
+        CRPC_WAITING            = 11,   //没收到response (request may or may not be completely sent).
+        CRPC_INCOMING           = 12,   //部分收到了response
+        CRPC_READY              = 13    //完全收到response 但并没有被上层read from the socket.
+    } state;
+    struct list_head ready_links;       //state == READY，与&homa_sock.ready_client_rpcs关联
 };
 //[homa_server_rpc] 这台计算机作为server角度的所有rpc
 struct homa_server_rpc {
-    __be32 saddr;                       //client rpc的source address
-    __u16 sport;                        //client rpc的source port
+    struct homa_addr client;            //client的rpc addr信息
     __u64 id;                           //id(unique from saddr/sport).
     struct homa_message_in request;     //req msg的info
     struct homa_message_out response;   //resp msg的info
 
     //server rpc状态
     enum {
-        INCOMING           = 5, //部分接收
-        READY              = 6, //request 是完整的 但没有通过socket被read
-        IN_SERVICE         = 7, //request被read了但是response还没返回
-        RESPONSE           = 8  //reponse都返回了
+        SRPC_INCOMING           = 5, //部分接收
+        SRPC_READY              = 6, //request 是完整的 但没有通过socket被read
+        SRPC_IN_SERVICE         = 7, //request被read了但是response还没返回
+        SRPC_RESPONSE           = 8  //reponse都返回了
     } state;
 
     struct list_head server_rpc_links;   //用这个存放在&homa_sock.server_rpcs.
@@ -187,7 +195,6 @@ static inline struct sk_buff **homa_next_skb(struct sk_buff *skb)
 {
     return (struct sk_buff **) (skb->head + HOMA_MAX_DATA_PER_PACKET+ HOMA_MAX_HEADER + HOMA_SKB_RESERVE);
 }
-
 //======================================
 
 extern void   homa_addr_destroy(struct homa_addr *addr);
@@ -198,9 +205,13 @@ extern void   homa_client_rpc_destroy(struct homa_client_rpc *crpc);
 extern void   homa_close(struct sock *sock, long timeout);
 extern void   homa_data_from_client(struct homa *homa, struct sk_buff *skb,
                                     struct homa_sock *hsk, struct homa_server_rpc *srpc);
+extern void   homa_data_from_server(struct homa *homa, struct sk_buff *skb,
+                                    struct homa_sock *hsk, struct homa_client_rpc *crpc);
 extern int    homa_diag_destroy(struct sock *sk, int err);
 extern int    homa_disconnect(struct sock *sk, int flags);
 extern void   homa_err_handler(struct sk_buff *skb, u32 info);
+extern struct homa_client_rpc *homa_find_client_rpc(struct homa_sock *hsk,
+                                                    __u16 sport, __u64 id);
 extern struct homa_server_rpc *homa_find_server_rpc(struct homa_sock *hsk,
                                                     __be32 saddr, __u16 sport, __u64 id);
 extern struct homa_sock *
@@ -210,6 +221,8 @@ extern int    homa_getsockopt(struct sock *sk, int level, int optname,
                               char __user *optval, int __user *option);
 extern int    homa_handler(struct sk_buff *skb);
 extern int    homa_hash(struct sock *sk);
+extern int    homa_ioc_recv(struct sock *sk, unsigned long arg);
+extern int    homa_ioc_reply(struct sock *sk, unsigned long arg);
 extern int    homa_ioc_send(struct sock *sk, unsigned long arg);
 extern int    homa_ioctl(struct sock *sk, int cmd, unsigned long arg);
 extern int    homa_message_in_copy_data(struct homa_message_in *hmi,
