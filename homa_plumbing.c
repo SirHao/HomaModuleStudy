@@ -248,6 +248,7 @@ int homa_sock_init(struct sock *sk)
     INIT_LIST_HEAD(&hsk->client_rpcs);
     INIT_LIST_HEAD(&hsk->server_rpcs);
     INIT_LIST_HEAD(&hsk->ready_server_rpcs);
+    INIT_LIST_HEAD(&hsk->ready_client_rpcs);
     printk(KERN_NOTICE "[hsk init]opened socket %d\n", hsk->client_port);
     return 0;
 }
@@ -411,7 +412,7 @@ int homa_ioc_recv(struct sock *sk, unsigned long arg) {
         timeo = homa_wait_ready_msg(sk, &timeo);
         if (signal_pending(current))
             return sock_intr_errno(timeo);
-        printk(KERN_NOTICE "Woke up, trying again\n");
+        printk(KERN_NOTICE "[homa_ioc_recv]Woke up, trying again\n");
     }
 
     args.source_addr.sin_family = AF_INET;
