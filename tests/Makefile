@@ -2,8 +2,8 @@
 
 CFLAGS := -Wall -Werror -g -I..
 
-BINS := bufferClient bufferServer  homaTest \
-        homaServer receiveRaw scratch sendRaw  useMemory
+BINS := bufferClient bufferServer getTimeTrace homaTest \
+        homaServer receiveRaw scratch sendRaw testTimeTrace useMemory
 
 OBJS := $(patsubst %,%.o,$(BINS))
 

@@ -109,7 +109,7 @@ int homa_message_in_copy_data(struct homa_message_in *msgin, struct iov_iter *it
     int err;
     int remaining = max_bytes;
 
-    //即使数据包具有重叠范围，也请执行正确的操作；基本不回发生
+    //即使数据包具有重叠范围，也请执行正确的操作；基本不发生
     offset = 0;
     skb_queue_walk(&msgin->packets, skb)
     {

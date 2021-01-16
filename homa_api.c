@@ -3,7 +3,7 @@
 #include <errno.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
-#include "tests/homa.h"
+#include "homa.h"
 
 /**
 * homa_recv（）-等待传入消息（请求或响应）并返回。

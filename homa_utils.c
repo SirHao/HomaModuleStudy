@@ -41,12 +41,22 @@ struct homa_server_rpc *homa_find_server_rpc(struct homa_sock *hsk, __be32 saddr
 {
     struct list_head *pos;
     list_for_each(pos, &hsk->server_rpcs) {
-        struct homa_server_rpc *srpc = list_entry(pos,
-        struct homa_server_rpc, server_rpc_links);
+        struct homa_server_rpc *srpc = list_entry(pos, struct homa_server_rpc, server_rpc_links);
         if ((srpc->id == id) &&
-            (srpc->sport == sport) &&
-            (srpc->saddr == saddr)) {
+            (srpc->client.dport == sport) &&
+            (srpc->client.daddr == saddr)) {
             return srpc;
+        }
+    }
+    return NULL;
+}
+// use id to find a home_client_rpc in this sock
+struct homa_client_rpc *homa_find_client_rpc(struct homa_sock *hsk,__u16 sport, __u64 id){
+    struct list_head *pos;
+    list_for_each(pos, &hsk->client_rpcs) {
+        struct homa_client_rpc *crpc = list_entry(pos, struct homa_client_rpc, client_rpc_links);
+        if (crpc->id == id) {
+            return crpc;
         }
     }
     return NULL;
@@ -138,7 +148,15 @@ void homa_client_rpc_destroy(struct homa_client_rpc *crpc) {
 }
 //释放homa server rpc
 void homa_server_rpc_destroy(struct homa_server_rpc *srpc) {
+    homa_addr_destroy(&srpc->client);
     homa_message_in_destroy(&srpc->request); //close会先释放client rpc，会不会那会已经把client rpc释放掉了
+    if (srpc->state == SRPC_RESPONSE)
+        homa_message_out_destroy(&srpc->response);
+    list_del(&srpc->server_rpc_links);
+    if (srpc->state == SRPC_READY)
+        __list_del_entry(&srpc->ready_links);
+    kfree(srpc);
+
 }
 //释放homa_addr的dst
 void homa_addr_destroy(struct homa_addr *addr)

@@ -9,7 +9,7 @@
 #include <net/inet_common.h>
 typedef unsigned __poll_t;
 
-#include "tests/homa.h"
+#include "homa.h"
 
 //一个包包含的最大数据量(不包含Homa's header, IP header等）；这假设以太网分组帧。
 #define HOMA_MAX_DATA_PER_PACKET 1400
@@ -148,7 +148,7 @@ struct homa_message_out
 struct homa_message_in {
     struct sk_buff_head packets;//到目前为止已收到此消息的数据包。该列表按偏移量顺序排序（head是最低偏移量），但是数据包可能会乱序接收，因此列表中有时可能会出现漏洞。
     int total_length;           //整个消息的总长度
-    int bytes_remaining;        //还没有收到的消息长度,将与proority挂钩
+    int bytes_remaining;        //还没有收到的消息长度,将与priority挂钩
     int granted;                //sender所有grant bytes
     int priority;               //优先级
 };
@@ -179,7 +179,7 @@ struct homa_server_rpc {
     enum {
         SRPC_INCOMING           = 5, //部分接收
         SRPC_READY              = 6, //request 是完整的 但没有通过socket被read
-        SRPC_IN_SERVICE         = 7, //request被read了但是response还没返回
+        SRPC_IN_SERVICE         = 7, //request 被read了但是response还没返回
         SRPC_RESPONSE           = 8  //reponse都返回了
     } state;
 
@@ -209,7 +209,7 @@ extern void   homa_data_from_server(struct homa *homa, struct sk_buff *skb,
                                     struct homa_sock *hsk, struct homa_client_rpc *crpc);
 extern int    homa_diag_destroy(struct sock *sk, int err);
 extern int    homa_disconnect(struct sock *sk, int flags);
-extern void   homa_err_handler(struct sk_buff *skb, u32 info);
+extern int   homa_err_handler(struct sk_buff *skb, u32 info);
 extern struct homa_client_rpc *homa_find_client_rpc(struct homa_sock *hsk,
                                                     __u16 sport, __u64 id);
 extern struct homa_server_rpc *homa_find_server_rpc(struct homa_sock *hsk,
