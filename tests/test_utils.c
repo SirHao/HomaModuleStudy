@@ -1,5 +1,4 @@
-// This file contains a collection of functions that are useful in
-// testing.
+:wqgit // testing.
 
 #include <errno.h>
 #include <string.h>
