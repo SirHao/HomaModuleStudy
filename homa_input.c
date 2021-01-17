@@ -64,22 +64,12 @@ void homa_data_from_client(struct homa *homa, struct sk_buff *skb, struct homa_s
     int err;
     //如果刚才没找到srpc，那么初始化一个，并放入hsk->server_rpcs
     if (!srpc) {
-        srpc = (struct homa_server_rpc *) kmalloc(sizeof(*srpc),
-                                                  GFP_KERNEL);
-        err = homa_addr_init(&srpc->client, (struct sock *) hsk,
-                             hsk->inet.inet_saddr,
-                             hsk->client_port, ip_hdr(skb)->saddr,
-                             ntohs(h->common.sport));               //srpc的client addr初始化
-        if (err) {
-            printk(KERN_WARNING "Couldn't create homa_addr_for " "%pI4:%u, error %d", &ip_hdr(skb)->saddr, ntohs(h->common.sport), err);
-            kfree(srpc);
+        srpc = homa_server_rpc_new(hsk, ip_hdr(skb)->saddr, h, &err);
+        if (!srpc) {
+            printk(KERN_WARNING "[homa_data_from_client] couldn't create srpc: error %d", -err);
             kfree_skb(skb);
             return;
         }
-        srpc->id = h->common.id;                                        //用client的rpc来分配，所以找rpc的时候需要三个都吻合
-        homa_message_in_init(&srpc->request, ntohl(h->message_length), ntohl(h->unscheduled));
-        srpc->state = SRPC_INCOMING;
-        list_add(&srpc->server_rpc_links, &hsk->server_rpcs);
     } else if (unlikely(srpc->state != SRPC_INCOMING)) {
         kfree_skb(skb);
         return;
@@ -97,6 +87,33 @@ void homa_data_from_client(struct homa *homa, struct sk_buff *skb, struct homa_s
         "[homa handler] Incoming RPC is til not READY;remaining:%d \n", srpc->request.bytes_remaining);
     }
 }
+//usage:[handler]
+//对于incoming 的pkg,初始或者找到crpc，按照offset插入hmi中的packages
+void homa_data_from_server(struct homa *homa, struct sk_buff *skb, struct homa_sock *hsk, struct homa_client_rpc *crpc)
+{
+    struct data_header *h = (struct data_header *) skb->data;
+
+    if (crpc->state != CRPC_INCOMING) {
+        if (unlikely(crpc->state != CRPC_WAITING)) {
+            kfree_skb(skb);
+            return;
+        }
+        homa_message_in_init(&crpc->response, ntohl(h->message_length),
+                             ntohl(h->unscheduled));
+        crpc->state = CRPC_INCOMING;
+    }
+    homa_add_packet(&crpc->response, skb);
+    if (crpc->response.bytes_remaining == 0) {
+        struct sock *sk = (struct sock *) hsk;
+        printk(KERN_NOTICE "[homa_data_from_server]Incoming response is complete\n");
+        crpc->state = CRPC_READY;
+        list_add_tail(&crpc->ready_links, &hsk->ready_client_rpcs);
+        sk->sk_data_ready(sk);
+    }else{
+        printk(KERN_NOTICE "[homa_data_from_server]Incoming response is til not complete\n");
+    }
+}
+
 
 
 /*=======================recvmsg=========================*/
@@ -157,29 +174,4 @@ void homa_message_in_destroy(struct homa_message_in *msgin) {
 }
 
 /*======================client recv=======================*/
-void homa_data_from_server(struct homa *homa, struct sk_buff *skb,
-                           struct homa_sock *hsk, struct homa_client_rpc *crpc)
-{
-    struct data_header *h = (struct data_header *) skb->data;
-
-    if (crpc->state != CRPC_INCOMING) {
-        if (unlikely(crpc->state != CRPC_WAITING)) {
-            kfree_skb(skb);
-            return;
-        }
-        homa_message_in_init(&crpc->response, ntohl(h->message_length),
-                             ntohl(h->unscheduled));
-        crpc->state = CRPC_INCOMING;
-    }
-    homa_add_packet(&crpc->response, skb);
-    if (crpc->response.bytes_remaining == 0) {
-        struct sock *sk = (struct sock *) hsk;
-        printk(KERN_NOTICE "[homa_data_from_server]Incoming response is complete\n");
-        crpc->state = CRPC_READY;
-        list_add_tail(&crpc->ready_links, &hsk->ready_client_rpcs);
-        sk->sk_data_ready(sk);
-    }else{
-        printk(KERN_NOTICE "[homa_data_from_server]Incoming response is til not complete\n");
-    }
-}
 

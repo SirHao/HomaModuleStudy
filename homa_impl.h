@@ -157,8 +157,8 @@ struct homa_message_in {
 struct homa_client_rpc
 {
     __u64  id;                          //唯一id
-    struct homa_addr dest;              //rpc peer的地址信息：ip/port/路由信息等
     struct list_head client_rpc_links;  //用来将这个homa_client_rpc连接到&homa_sock.client_rpcs.
+    struct homa_addr dest;              //rpc peer的地址信息：ip/port/路由信息等
     struct homa_message_out request;    //message request信息
     struct homa_message_in response;    //message response信息
     enum {
@@ -201,7 +201,10 @@ extern void   homa_addr_destroy(struct homa_addr *addr);
 extern int    homa_addr_init(struct homa_addr *addr, struct sock *sk,
                              __be32 saddr, __u16 sport, __be32 daddr, __u16 dport);
 extern int    homa_bind(struct socket *sk, struct sockaddr *addr, int addr_len);
-extern void   homa_client_rpc_destroy(struct homa_client_rpc *crpc);
+extern void   homa_client_rpc_free(struct homa_client_rpc *crpc);
+extern struct homa_client_rpc *homa_client_rpc_new(struct homa_sock *hsk,
+                                                   struct sockaddr_in *dest, size_t length,
+                                                   struct iov_iter *iter, int *err);
 extern void   homa_close(struct sock *sock, long timeout);
 extern void   homa_data_from_client(struct homa *homa, struct sk_buff *skb,
                                     struct homa_sock *hsk, struct homa_server_rpc *srpc);
@@ -244,7 +247,9 @@ extern void   homa_rehash(struct sock *sk);
 extern int    homa_sendmsg(struct sock *sk, struct msghdr *msg, size_t len);
 extern int    homa_sendpage(struct sock *sk, struct page *page, int offset,
                             size_t size, int flags);
-extern void   homa_server_rpc_destroy(struct homa_server_rpc *srpc);
+extern void   homa_server_rpc_free(struct homa_server_rpc *srpc);
+extern struct homa_server_rpc *homa_server_rpc_new(struct homa_sock *hsk,
+                                                   __be32 source, struct data_header *h, int *err);
 extern int    homa_setsockopt(struct sock *sk, int level, int optname,
                               char __user *optval, unsigned int optlen);
 extern int    homa_sock_init(struct sock *sk);
