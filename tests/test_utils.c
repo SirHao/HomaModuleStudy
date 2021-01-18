@@ -1,4 +1,4 @@
-:wqgit // testing.
+// testing.
 
 #include <errno.h>
 #include <string.h>

@@ -22,22 +22,23 @@ int homa_message_out_init(struct homa_message_out *msgout, struct sock *sk,
     int bytes_left;
     struct sk_buff *skb;
     int err;
-    //初始化一个homa_msg_out
     struct sk_buff **last_link = &msgout->packets;
-	msgout->length = len;                                        //初始化hmo的总长度为 msglen
+    msgout->length = len;                                        //初始化hmo的总长度为 msglen
     msgout->packets = NULL;                                      //头结点初始化函数
     msgout->next_packet = NULL;
     msgout->next_offset = 0;
-    msgout->unscheduled = 7*HOMA_MAX_DATA_PER_PACKET;      //unscheduled_bytes初始化为7个数据包
-    msgout->limit = msgout->unscheduled;                      //limit这个版本目前就是unscheduled_bytes
-	msgout->priority = 0;                                        //优先级暂时设置为 0
 
+    /* This is a temporary guess; must handle better in the future. */
+    msgout->unscheduled = 7*HOMA_MAX_DATA_PER_PACKET;
+    msgout->limit = msgout->unscheduled;
+    msgout->priority = 0;
 
     //将msg中的data拷贝到socket buffer并放入homa_msg_out
     if (unlikely(len > HOMA_MAX_MESSAGE_LENGTH)) {
         return -EINVAL;
     }
-    for (bytes_left = len, last_link = &msgout->packets; bytes_left > 0; bytes_left -= HOMA_MAX_DATA_PER_PACKET) {
+    for (bytes_left = len, last_link = &msgout->packets; bytes_left > 0;
+         bytes_left -= HOMA_MAX_DATA_PER_PACKET) {
         struct data_header *h;
         __u32 cur_size = HOMA_MAX_DATA_PER_PACKET;
         if (likely(cur_size > bytes_left)) {
@@ -68,7 +69,6 @@ int homa_message_out_init(struct homa_message_out *msgout, struct sock *sk,
         last_link = homa_next_skb(skb);
         *last_link = NULL;
     }
-    //要发送的next_packet指向最开始
     msgout->next_packet = msgout->packets;
     return 0;
 }
@@ -81,7 +81,7 @@ int homa_message_out_init(struct homa_message_out *msgout, struct sock *sk,
 void homa_message_out_destroy(struct homa_message_out *msgout)
 {
     struct sk_buff *skb, *next;
-    for (skb = msgout->packets; skb != NULL; skb = next) {
+    for (skb = msgout->packets; skb !=  NULL; skb = next) {
         next = *homa_next_skb(skb);
         kfree_skb(skb);
     }
@@ -95,9 +95,7 @@ void homa_xmit_packets(struct homa_message_out *msgout, struct sock *sk,
         skb_get(msgout->next_packet);
         err = ip_queue_xmit(sk, msgout->next_packet, &dest->flow);
         if (err) {
-            printk(KERN_WARNING "ip_queue_xmit failed in homa_xmit_packets: %d", err);
-        }else{
-
+            printk(KERN_WARNING "[ip_queue_xmit] failed in homa_xmit_packets: %d", err);
         }
         msgout->next_packet = *homa_next_skb(msgout->next_packet);
         msgout->next_offset += HOMA_MAX_DATA_PER_PACKET;

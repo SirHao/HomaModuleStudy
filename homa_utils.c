@@ -34,22 +34,22 @@ int homa_addr_init(struct homa_addr *addr, struct sock *sk, __be32 saddr,
  */
 struct homa_client_rpc *homa_client_rpc_new(struct homa_sock *hsk, struct sockaddr_in *dest, size_t length, struct iov_iter *iter, int *err) {
     struct homa_client_rpc *crpc;
-    crpc = (struct homa_client_rpc *) kmalloc(sizeof(*crpc), GFP_KERNEL);  //malloc memory
+    crpc = (struct homa_client_rpc *) kmalloc(sizeof(*crpc), GFP_KERNEL);
     if (unlikely(!crpc)) {
         *err = -ENOMEM;
         return NULL;
     }
-    crpc->id = hsk->next_outgoing_id;                                       //allocate crpc id
+    crpc->id = hsk->next_outgoing_id;
     hsk->next_outgoing_id++;
-    list_add(&crpc->client_rpc_links, &hsk->client_rpcs);                   //add to sk crpc list
-    *err = homa_addr_init(&crpc->dest, (struct sock *) hsk, hsk->inet.inet_saddr, hsk->client_port, dest->sin_addr.s_addr, ntohs(dest->sin_port)); //address init
-    if (unlikely(*err != 0)) goto error;
-    *err = homa_message_out_init(&crpc->request, (struct sock *) hsk, iter, length, &crpc->dest, hsk->client_port, crpc->id);                      //hmo init
+    list_add(&crpc->client_rpc_links, &hsk->client_rpcs);
+    *err = homa_addr_init(&crpc->dest, (struct sock *) hsk, hsk->inet.inet_saddr, hsk->client_port, dest->sin_addr.s_addr, ntohs(dest->sin_port));
     if (unlikely(*err != 0))
         goto error;
-    crpc->state = CRPC_WAITING;                                             //change state
+    *err = homa_message_out_init(&crpc->request, (struct sock *) hsk, iter,length, &crpc->dest, hsk->client_port, crpc->id);
+    if (unlikely(*err != 0))
+        goto error;
+    crpc->state = CRPC_WAITING;
     return crpc;
-
 error:
     homa_addr_destroy(&crpc->dest);
     kfree(crpc);
@@ -66,20 +66,20 @@ error:
  */
 struct homa_server_rpc *homa_server_rpc_new(struct homa_sock *hsk, __be32 source, struct data_header *h, int *err) {
     struct homa_server_rpc *srpc;
-    srpc = (struct homa_server_rpc *) kmalloc(sizeof(*srpc), GFP_KERNEL);  //malloc
+    srpc = (struct homa_server_rpc *) kmalloc(sizeof(*srpc), GFP_KERNEL);
     if (!srpc) {
         *err = -ENOMEM;
         return NULL;
     }
-    *err = homa_addr_init(&srpc->client, (struct sock *) hsk, hsk->inet.inet_saddr, hsk->client_port, source, ntohs(h->common.sport)); //addr init
+    *err = homa_addr_init(&srpc->client, (struct sock *) hsk, hsk->inet.inet_saddr, hsk->client_port, source, ntohs(h->common.sport));
     if (*err) {
         kfree(srpc);
         return NULL;
     }
     srpc->id = h->common.id;
-    homa_message_in_init(&srpc->request, ntohl(h->message_length), ntohl(h->unscheduled));  //hmi init
-    srpc->state = SRPC_INCOMING;                //change state
-    list_add(&srpc->server_rpc_links, &hsk->server_rpcs); //add to sk
+    homa_message_in_init(&srpc->request, ntohl(h->message_length), ntohl(h->unscheduled));
+    srpc->state = SRPC_INCOMING;
+    list_add(&srpc->server_rpc_links, &hsk->server_rpcs);
     return srpc;
 }
 
@@ -137,7 +137,7 @@ char *homa_symbol_for_type(uint8_t type)
 	case BUSY:
 		return "BUSY";
 	}
-	
+
 	/* Using a static buffer can produce garbled text under concurrency,
 	 * but (a) it's unlikely (this code only executes if the opcode is
 	 * bogus), (b) this is mostly for testing and debugging, and (c) the
@@ -205,7 +205,7 @@ void homa_client_rpc_free(struct homa_client_rpc *crpc) {
     homa_addr_destroy(&crpc->dest);
     __list_del_entry(&crpc->client_rpc_links);
     homa_message_out_destroy(&crpc->request);
-    if(crpc->state >= CRPC_INCOMING){
+    if (crpc->state >= CRPC_INCOMING) {
         homa_message_in_destroy(&crpc->response);
         if (crpc->state == CRPC_READY)
             __list_del_entry(&crpc->ready_links);
@@ -215,7 +215,7 @@ void homa_client_rpc_free(struct homa_client_rpc *crpc) {
 //释放homa server rpc
 void homa_server_rpc_free(struct homa_server_rpc *srpc) {
     homa_addr_destroy(&srpc->client);
-    homa_message_in_destroy(&srpc->request); //close会先释放client rpc，会不会那会已经把client rpc释放掉了
+    homa_message_in_destroy(&srpc->request);
     if (srpc->state == SRPC_RESPONSE)
         homa_message_out_destroy(&srpc->response);
     list_del(&srpc->server_rpc_links);
