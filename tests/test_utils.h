@@ -12,6 +12,7 @@ extern int     check_buffer(void *buffer, size_t length);
 extern double  get_cycles_per_sec();
 extern void    seed_buffer(void *buffer, size_t length, int seed);
 extern char   *print_address(struct sockaddr_in *addr);
+extern double  to_seconds(uint64_t cycles);
 
 /**
  * rdtsc(): return the current value of the fine-grain CPU cycle counter
@@ -19,9 +20,9 @@ extern char   *print_address(struct sockaddr_in *addr);
  */
 inline static uint64_t rdtsc(void)
 {
-	uint32_t lo, hi;
-	__asm__ __volatile__("rdtsc" : "=a" (lo), "=d" (hi));
-	return (((uint64_t)hi << 32) | lo);
+    uint32_t lo, hi;
+    __asm__ __volatile__("rdtsc" : "=a" (lo), "=d" (hi));
+    return (((uint64_t)hi << 32) | lo);
 }
 
 #ifdef __cplusplus

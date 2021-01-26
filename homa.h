@@ -1,4 +1,10 @@
-//homa内核调用接口
+/* This file defines the kernel call interface for the Homa
+ * transport protocol.
+ */
+
+#ifndef _HOMA_H
+#define _HOMA_H
+
 #include <linux/types.h>
 #ifndef __KERNEL__
 #include <netinet/in.h>
@@ -10,71 +16,98 @@ extern "C"
 {
 #endif
 
-    //Homa的IP协议空间中的协议号（这不是正式分配的插槽）。
-    #define IPPROTO_HOMA 140
+/* Homa's protocol number within the IP protocol space (this is not an
+ * officially allocated slot).
+ */
+#define IPPROTO_HOMA 140
 
-    //最大的单次收发消息大小
-    #define HOMA_MAX_MESSAGE_LENGTH 1000000
+/**
+ * define HOMA_MAX_MESSAGE_LENGTH - Maximum bytes of payload in a Homa
+ * request or response message.
+ */
+#define HOMA_MAX_MESSAGE_LENGTH 1000000
 
-    //16位端口空间被划分为两个非重叠区域。 端口1-32767专为定义明确的服务器端口保留。
-    //其余端口用于client port； 这些由Homa自动分配。 端口0被保留。
-    #define HOMA_MIN_CLIENT_PORT 0x8000
+/**
+ * define HOMA_MIN_CLIENT_PORT - The 16-bit port space is divided into
+ * two nonoverlapping regions. Ports 1-32767 are reserved exclusively
+ * for well-defined server ports. The remaining ports are used for client
+ * ports; these are allocated automatically by Homa. Port 0 is reserved.
+ */
+#define HOMA_MIN_CLIENT_PORT 0x8000
 
-    //Homa套接字上的I/O ctl call。
-    //这些特定的值是随机选择的，可能需要重新考虑以确保它们不与其他任何冲突。
-    #define HOMAIOCSEND   1003101
-    #define HOMAIOCRECV   1003102
-    #define HOMAIOCINVOKE 1003103
-    #define HOMAIOCREPLY  1003104
-    #define HOMAIOCABORT  1003105
-    //ioctl每个signal对应的处理函数
-    extern int    homa_send(int sockfd, const void *request, size_t reqlen,
-                            const struct sockaddr *dest_addr, size_t addrlen,
-                            uint64_t *id);
-    extern size_t homa_recv(int sockfd, void *buf, size_t len,
-                            struct sockaddr *src_addr, size_t addrlen,
-                            uint64_t *id);
-    extern size_t homa_invoke(int sockfd, const void *request, size_t reqlen,
-                              const struct sockaddr *dest_addr, size_t addrlen,
-                              void *response, size_t resplen);
-    extern size_t homa_reply(int sockfd, const void *response, size_t resplen,
-                             const struct sockaddr *dest_addr, size_t addrlen,
-                             uint64_t id);
-    extern int    homa_abort(int sockfd, uint64_t id);
+/**
+ * I/O control calls on Homa sockets. These particular values were
+ * chosen somewhat randomly, and probably need to be reconsidered to
+ * make sure they don't conflict with anything else.
+ */
 
-    //userspace HOMAIOCSEND传递data到kernel space的format; 假设使用IPV4.
-    struct homa_args_send_ipv4 {
-        void *request;
-        size_t reqlen;
-        struct sockaddr_in dest_addr;
-        __u64 id;
-    };
+#define HOMAIOCSEND   1003101
+#define HOMAIOCRECV   1003102
+#define HOMAIOCINVOKE 1003103
+#define HOMAIOCREPLY  1003104
+#define HOMAIOCABORT  1003105
 
-    //userspace HOMAIOCRECV接收data与kernel space的format; 假设使用IPV4.
-    struct homa_args_recv_ipv4 {
-        void *buf;
-        size_t len;
-        struct sockaddr_in source_addr;
-        __u64 id;
-    };
+extern int    homa_send(int sockfd, const void *request, size_t reqlen,
+			const struct sockaddr *dest_addr, size_t addrlen,
+			uint64_t *id);
+extern size_t homa_recv(int sockfd, void *buf, size_t len,
+			struct sockaddr *src_addr, size_t addrlen,
+			uint64_t *id);
+extern size_t homa_invoke(int sockfd, const void *request, size_t reqlen,
+			const struct sockaddr *dest_addr, size_t addrlen,
+			void *response, size_t resplen);
+extern size_t homa_reply(int sockfd, const void *response, size_t resplen,
+			const struct sockaddr *dest_addr, size_t addrlen,
+			uint64_t id);
+extern int    homa_abort(int sockfd, uint64_t id);
 
-    //passes arguments and results betweeen homa_invoke and the HOMAIOCINVOKE ioctl.假设使用IPV4.
-    struct homa_args_invoke_ipv4 {
-        void *request;
-        size_t reqlen;
-        struct sockaddr_in dest_addr;
-        void *response;
-        size_t resplen;
-    };
+/**
+ * define homa_args_send_ipv4 - Structure that passes arguments and results
+ * betweeen homa_send and the HOMAIOCSEND ioctl. Assumes IPV4 addresses.
+ */
+struct homa_args_send_ipv4 {
+	void *request;
+	size_t reqlen;
+	struct sockaddr_in dest_addr;
+	__u64 id;
+};
 
-    //passes arguments and results betweeen homa_reply and the HOMAIOCREPLY ioctl. 假设使用IPV4.
-    struct homa_args_reply_ipv4 {
-        void *response;
-        size_t resplen;
-        struct sockaddr_in dest_addr;
-        __u64 id;
-    };
+/**
+ * define homa_args_recv_ipv4 - Structure that passes arguments and results
+ * betweeen homa_recv and the HOMAIOCRECV ioctl. Assumes IPV4 addresses.
+ */
+struct homa_args_recv_ipv4 {
+	void *buf;
+	size_t len;
+	struct sockaddr_in source_addr;
+	__u64 id;
+};
+
+/**
+ * define homa_args_invoke_ipv4 - Structure that passes arguments and results
+ * betweeen homa_invoke and the HOMAIOCINVOKE ioctl. Assumes IPV4 addresses.
+ */
+struct homa_args_invoke_ipv4 {
+	void *request;
+	size_t reqlen;
+	struct sockaddr_in dest_addr;
+	void *response;
+	size_t resplen;
+};
+
+/**
+ * define homa_args_reply_ipv4 - Structure that passes arguments and results
+ * betweeen homa_reply and the HOMAIOCREPLY ioctl. Assumes IPV4 addresses.
+ */
+struct homa_args_reply_ipv4 {
+	void *response;
+	size_t resplen;
+	struct sockaddr_in dest_addr;
+	__u64 id;
+};
 
 #ifdef __cplusplus
 }
 #endif
+
+#endif /* _HOMA_H */

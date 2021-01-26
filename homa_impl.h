@@ -1,3 +1,12 @@
+/* This file contains definitions that are shared across the files
+ * that implement Homa for Linux.
+ */
+
+#ifndef _HOMA_IMPL_H
+#define _HOMA_IMPL_H
+
+#include <linux/audit.h>
+#include <linux/list.h>
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -23,10 +32,24 @@ _Static_assert(1500 >= (HOMA_MAX_DATA_PER_PACKET + HOMA_MAX_IPV4_HEADER + HOMA_M
 #define HOMA_SKB_RESERVE (HOMA_MAX_IPV4_HEADER + 20)
 // all Homa packet buffers的总大小 "sizeof(void*)" 用来指向homa_next_skb
 #define HOMA_SKB_SIZE (HOMA_MAX_DATA_PER_PACKET + HOMA_MAX_HEADER + HOMA_SKB_RESERVE + sizeof(void*))
-
+//hash bucket size in homa_sock_tab
+#define HOMA_SOCKTAB_BUCKETS 1024
 
 //===================结构体，变量================
-extern struct homa homa;
+
+struct homa_sock;
+
+//[homa_socktab]A hash table that maps from port numbers (either client or server) to homa_sock objects.
+struct homa_socktab {
+    struct mutex writeLock;   //port allocate need to be lock
+    struct hlist_head buckets[HOMA_SOCKTAB_BUCKETS]; //Heads of chains for hash table buckets.
+};
+//[homa_socktab_links] homa_socktab table entry
+struct homa_socktab_links {
+    struct hlist_node hash_links;
+    struct homa_sock *sock;
+};
+
 //[homa_sock] 一个open状态的homa socket的基本信息
 struct homa_sock
 {
@@ -36,11 +59,12 @@ struct homa_sock
     __u16 client_port;      //发送outgoing RPC requests使用的port
     __u64 next_outgoing_id; //下一个outgoing RPC requests需要分配的 rpc_id
 
-    struct list_head socket_links;       //用来链接到&homa.sockets
+    struct homa_socktab_links client_links;  //用client port来链接到&homa.sockets
+    struct homa_socktab_links server_links;  //用server port来链接到&homa.sockets
     struct list_head client_rpcs;        //发出这个socket上活跃的rpc list
     struct list_head server_rpcs;        //发往这个socket上活跃的rpc list
-    struct list_head ready_server_rpcs;  //state=ready的server rpc
     struct list_head ready_client_rpcs;  //state=ready的client rpc
+    struct list_head ready_server_rpcs;  //state=ready的server rpc
 };
 
 //[homa] - 有关Homa协议实施的Overall information;除单元测试外，一次通常全局唯一
@@ -48,8 +72,9 @@ struct homa
 {
     __u16 next_client_port;   //使用它作为下一个Homa套接字的client port； 单调递增。
                               // 当前值可能在分配给服务器的范围内； 使用前必须检查。 该端口可能已经在使用中； 必须检查。
-    struct list_head sockets; //homa socket list
+    struct homa_socktab port_map; //homa socket list
 };
+
 
 
 //================header struct========================
@@ -156,16 +181,19 @@ struct homa_message_in {
 //[homa_client_rpc] 对于从此计算机启动的每个活动RPC，都存在这个结构之一。
 struct homa_client_rpc
 {
-    __u64  id;                          //唯一id
-    struct list_head client_rpc_links;  //用来将这个homa_client_rpc连接到&homa_sock.client_rpcs.
-    struct homa_addr dest;              //rpc peer的地址信息：ip/port/路由信息等
-    struct homa_message_out request;    //message request信息
-    struct homa_message_in response;    //message response信息
     enum {
         CRPC_WAITING            = 11,   //没收到response (request may or may not be completely sent).
         CRPC_INCOMING           = 12,   //部分收到了response
         CRPC_READY              = 13    //完全收到response 但并没有被上层read from the socket.
     } state;
+
+    __u64  id;                          //唯一id
+    struct homa_addr dest;              //rpc peer的地址信息：ip/port/路由信息等
+
+    struct homa_message_out request;    //message request信息
+    struct homa_message_in response;    //message response信息
+
+	struct list_head client_rpc_links;  //用来将这个homa_client_rpc连接到&homa_sock.client_rpcs.
     struct list_head ready_links;       //state == READY，与&homa_sock.ready_client_rpcs关联
 };
 //[homa_server_rpc] 这台计算机作为server角度的所有rpc
@@ -195,8 +223,15 @@ static inline struct sk_buff **homa_next_skb(struct sk_buff *skb)
 {
     return (struct sk_buff **) (skb->head + HOMA_MAX_DATA_PER_PACKET+ HOMA_MAX_HEADER + HOMA_SKB_RESERVE);
 }
+static inline int homa_port_hash(__u16 port)
+{
+    return port & (HOMA_SOCKTAB_BUCKETS - 1);
+}
 //======================================
 
+
+extern void   homa_add_packet(struct homa_message_in *msgin,
+                              struct sk_buff *skb);
 extern void   homa_addr_destroy(struct homa_addr *addr);
 extern int    homa_addr_init(struct homa_addr *addr, struct sock *sk,
                              __be32 saddr, __u16 sport, __be32 daddr, __u16 dport);
@@ -204,26 +239,28 @@ extern int    homa_bind(struct socket *sk, struct sockaddr *addr, int addr_len);
 extern void   homa_client_rpc_free(struct homa_client_rpc *crpc);
 extern struct homa_client_rpc *homa_client_rpc_new(struct homa_sock *hsk,
                                                    struct sockaddr_in *dest, size_t length,
-                                                   struct iov_iter *iter, int *err);
+                                                   struct iov_iter *iter);
 extern void   homa_close(struct sock *sock, long timeout);
 extern void   homa_data_from_client(struct homa *homa, struct sk_buff *skb,
                                     struct homa_sock *hsk, struct homa_server_rpc *srpc);
 extern void   homa_data_from_server(struct homa *homa, struct sk_buff *skb,
                                     struct homa_sock *hsk, struct homa_client_rpc *crpc);
+extern void   homa_destroy(struct homa *homa);
 extern int    homa_diag_destroy(struct sock *sk, int err);
 extern int    homa_disconnect(struct sock *sk, int flags);
-extern int   homa_err_handler(struct sk_buff *skb, u32 info);
+extern int    homa_err_handler(struct sk_buff *skb, u32 info);
 extern struct homa_client_rpc *homa_find_client_rpc(struct homa_sock *hsk,
                                                     __u16 sport, __u64 id);
 extern struct homa_server_rpc *homa_find_server_rpc(struct homa_sock *hsk,
                                                     __be32 saddr, __u16 sport, __u64 id);
 extern struct homa_sock *
-homa_find_socket(struct homa *homa, __u16 port);
+homa_sock_find(struct homa_socktab *socktab, __u16 port);
 extern int    homa_get_port(struct sock *sk, unsigned short snum);
 extern int    homa_getsockopt(struct sock *sk, int level, int optname,
                               char __user *optval, int __user *option);
 extern int    homa_handler(struct sk_buff *skb);
 extern int    homa_hash(struct sock *sk);
+extern void   homa_init(struct homa *homa);
 extern int    homa_ioc_recv(struct sock *sk, unsigned long arg);
 extern int    homa_ioc_reply(struct sock *sk, unsigned long arg);
 extern int    homa_ioc_send(struct sock *sk, unsigned long arg);
@@ -240,7 +277,10 @@ extern int    homa_message_out_init(struct homa_message_out *hmo,
 extern __poll_t
 homa_poll(struct file *file, struct socket *sock,
           struct poll_table_struct *wait);
-extern char  *homa_print_header(struct sk_buff *skb, char *buffer, int length);
+extern char  *homa_print_ipv4_addr(__be32 addr, char *buffer);
+extern char  *homa_print_packet(struct sk_buff *skb, char *buffer, int length);
+extern char  *homa_print_packet_short(struct sk_buff *skb, char *buffer,
+                                      int length);
 extern int    homa_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
                            int noblock, int flags, int *addr_len);
 extern void   homa_rehash(struct sock *sk);
@@ -249,10 +289,17 @@ extern int    homa_sendpage(struct sock *sk, struct page *page, int offset,
                             size_t size, int flags);
 extern void   homa_server_rpc_free(struct homa_server_rpc *srpc);
 extern struct homa_server_rpc *homa_server_rpc_new(struct homa_sock *hsk,
-                                                   __be32 source, struct data_header *h, int *err);
+                                                   __be32 source, struct data_header *h);
 extern int    homa_setsockopt(struct sock *sk, int level, int optname,
                               char __user *optval, unsigned int optlen);
-extern int    homa_sock_init(struct sock *sk);
+extern int    homa_sock_bind(struct homa_socktab *socktab,
+                             struct homa_sock *hsk, __u16 port);
+extern void   homa_sock_destroy(struct homa_sock *hsk,
+                                struct homa_socktab *socktab);
+extern void   homa_sock_init(struct homa_sock *hsk, struct homa *homa);
+extern int    homa_socket(struct sock *sk);
+extern void   homa_socktab_destroy(struct homa_socktab *socktab);
+extern void   homa_socktab_init(struct homa_socktab *socktab);
 extern char  *homa_symbol_for_type(uint8_t type);
 extern void   homa_unhash(struct sock *sk);
 extern int    homa_v4_early_demux(struct sk_buff *skb);
@@ -260,3 +307,5 @@ extern int    homa_v4_early_demux_handler(struct sk_buff *skb);
 extern int    homa_wait_ready_msg(struct sock *sk, long *timeo);
 extern void   homa_xmit_packets(struct homa_message_out *hmo, struct sock *sk,
                                 struct homa_addr *dest);
+
+#endif /* _HOMA_IMPL_H */

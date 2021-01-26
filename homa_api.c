@@ -1,4 +1,6 @@
-//此文件包含实现对应用程序可见的Homa API的函数。 它旨在成为part of user-level runtime lib
+/* This file contains functions that implement the Homa API visible to
+ * applications. It's intended to be part of the user-level run-time library.
+ */
 
 #include <errno.h>
 #include <sys/ioctl.h>
@@ -6,120 +8,137 @@
 #include "homa.h"
 
 /**
-* homa_recv（）-等待传入消息（请求或响应）并返回。
-* @sockfd：用于在其上接收消息的套接字的文件描述符。
-* @buf: 传入消息的缓冲区的第一个字节。
-* @len: @request中可用的字节数。
-* @src_addr: 发件人的地址将在此处返回。
-* @addrlen: @src_addr上的可用空间（以字节为单位）。
-* @id：与消息关联的RPC的唯一标识符 将在这里返回。
-*
-*return：传入消息的总大小。这可能比len更大，在这种情况下，传入消息的最后一个字节 被丢弃。 负值表示错误。
-*/
-size_t homa_recv(int sockfd, void *buf, size_t len, struct sockaddr *src_addr,
-                 size_t addrlen, uint64_t *id)
-{
-    struct homa_args_recv_ipv4 args;
-    int result;
-
-    if (addrlen < sizeof(struct sockaddr_in)) {
-        errno = EINVAL;
-        return -EINVAL;
-    }
-    args.buf = (void *) buf;
-    args.len = len;
-    result = ioctl(sockfd, HOMAIOCRECV, &args);
-    *((struct sockaddr_in *) src_addr) = args.source_addr;
-    *id = args.id;
-    return result;
-}
-
-/**
-* homa_send（）-发送请求消息以启动RPC。
-* @sockfd：在其上发送消息的套接字的文件描述符。
-* @request：包含请求消息的缓冲区的第一个字节。
-* @reqlen： request处的字节数。
-* @dest_addr：应将请求发送到的服务器地址。
-* @addrlen：dest_addr的大小（以字节为单位)。
-* @id：将在此处返回请求的唯一标识符;以后可用于查找此请求的响应。
-*
-* 返回：0表示请求已被接受。 负值表示错误。
-*/
-int homa_send(int sockfd, const void *request, size_t reqlen,
-              const struct sockaddr *dest_addr, size_t addrlen,
-              uint64_t *id)
-{
-    struct homa_args_send_ipv4 args;
-    int result;
-
-    if (dest_addr->sa_family != AF_INET) {
-        errno = EAFNOSUPPORT;
-        return -EAFNOSUPPORT;
-    }
-    args.request = (void *) request;
-    args.reqlen = reqlen;
-    args.dest_addr = *((struct sockaddr_in *) dest_addr);
-    args.id = 0;
-    result = ioctl(sockfd, HOMAIOCSEND, &args);
-    *id = args.id;
-    return result;
-}
-
-
-/**
- * homa_invoke() - 发送一个request msg并且等待response
- * @request:    request msg的buffer首地址
- * @reqlen:     request msg buffer len
- * @dest_addr:  目标地址
- * @response:   response msg的buffer首地址
- * @resplen:    response msg buffer len
- *
- * Return:     incoming msg len,may larger than len
+ * homa_invoke() - Send a request message and wait for the response.
+ * @sockfd:     File descriptor for the socket on which to send the message.
+ * @request:    First byte of buffer containing the request message.
+ * @reqlen:     Number of bytes at @request.
+ * @dest_addr:  Address of server to which the request should be sent.
+ * @addrlen:    Size of @dest_addr in bytes.
+ * @response:    First byte of buffer containing the request message.
+ * @resplen:     Number of bytes at @request.
+ * 
+ * Return:      The total size of the incoming message. This may be larger
+ *              than len, in which case the last bytes of the incoming message
+ *              were discarded. A negative value indicates an error. 
  */
 size_t homa_invoke(int sockfd, const void *request, size_t reqlen,
-                   const struct sockaddr *dest_addr, size_t addrlen,
-                   void *response, size_t resplen)
+		const struct sockaddr *dest_addr, size_t addrlen,
+		void *response, size_t resplen)
 {
-    struct homa_args_invoke_ipv4 args;
-    int result;
-
-    if (dest_addr->sa_family != AF_INET) {
-        errno = EAFNOSUPPORT;
-        return -EAFNOSUPPORT;
-    }
-    args.request = (void *) request;
-    args.reqlen = reqlen;
-    args.dest_addr = *((struct sockaddr_in *) dest_addr);
-    args.response = response;
-    args.resplen = resplen;
-    result = ioctl(sockfd, HOMAIOCSEND, &args);
-    return result;
+	struct homa_args_invoke_ipv4 args;
+	int result;
+	
+	if (dest_addr->sa_family != AF_INET) {
+		errno = EAFNOSUPPORT;
+		return -EAFNOSUPPORT;
+	}
+	args.request = (void *) request;
+	args.reqlen = reqlen;
+	args.dest_addr = *((struct sockaddr_in *) dest_addr);
+	args.response = response;
+	args.resplen = resplen;
+	result = ioctl(sockfd, HOMAIOCSEND, &args);
+	return result;
 }
 
 /**
- * homa_reply() -对于发送过来的req返回一个response
- * @response:   response msg的buffer首地址
- * @resplen:    response msg buffer len
- * @dest_addr:  RPC client 地址(通过homa_recv 接收消息的时候返回).
+ * homa_recv() - Wait for an incoming message (either request or response)
+ * and return it.
+ * @sockfd:     File descriptor for the socket on which to receive the message.
+ * @buf:        First byte of buffer for the incoming message.
+ * @len:        Number of bytes available at @request.
+ * @src_addr:   The sender's address will be returned here.
+ * @addrlen:    Space available at @src_addr, in bytes.
+ * @id:         A unique identifier for the RPC associated with the message
+ *              will be returned here.
+ * 
+ * Return:      The total size of the incoming message. This may be larger
+ *              than len, in which case the last bytes of the incoming message
+ *              were discarded. A negative value indicates an error. 
+ */
+size_t homa_recv(int sockfd, void *buf, size_t len, struct sockaddr *src_addr,
+		size_t addrlen, uint64_t *id)
+{
+	struct homa_args_recv_ipv4 args;
+	int result;
+	
+	if (addrlen < sizeof(struct sockaddr_in)) {
+		errno = EINVAL;
+		return -EINVAL;
+	}
+	args.buf = (void *) buf;
+	args.len = len;
+	result = ioctl(sockfd, HOMAIOCRECV, &args);
+	*((struct sockaddr_in *) src_addr) = args.source_addr;
+	*id = args.id;
+	return result;
+}
+
+/**
+ * homa_reply() - Send a response message for an RPC previously received
+ * with a call to homa_recv.
+ * @sockfd:     File descriptor for the socket on which to send the message.
+ * @response:   First byte of buffer containing the response message.
+ * @resplen:    Number of bytes at @response.
+ * @dest_addr:  Address of the RPC's client (returned by homa_recv when
+ *              the message was received).
  * @addrlen:    Size of @dest_addr in bytes.
- * @id:         request  的 Unique identifier ,
- *
+ * @id:         Unique identifier for the request, as returned by homa_recv 
+ *              when the request was received.
+ * 
+ * @dest_addr and @id must correspond to a previously-received request
+ * for which no reply has yet been sent; if there is no such active request,
+ * then this function does nothing.
+ * 
  * Return:      0 means the response has been accepted for delivery. A
- *              negative value indicates an error.
+ *              negative value indicates an error. 
  */
 size_t homa_reply(int sockfd, const void *response, size_t resplen,
-                  const struct sockaddr *dest_addr, size_t addrlen,
-                  uint64_t id)
+		const struct sockaddr *dest_addr, size_t addrlen,
+		uint64_t id)
 {
-    struct homa_args_reply_ipv4 args;
+	struct homa_args_reply_ipv4 args;
+	
+	if (dest_addr->sa_family != AF_INET) {
+		errno = EAFNOSUPPORT;
+		return -EAFNOSUPPORT;
+	}
+	args.response = (void *) response;
+	args.resplen = resplen;
+	args.dest_addr = *((struct sockaddr_in *) dest_addr);
+	args.id = id;
+	return ioctl(sockfd, HOMAIOCREPLY, &args);
+}
 
-    if (dest_addr->sa_family != AF_INET) {
-        errno = EAFNOSUPPORT;
-        return -EAFNOSUPPORT;
-    }
-    args.response = (void *) response;
-    args.resplen = resplen;
-    args.dest_addr = *((struct sockaddr_in *) dest_addr);
-    args.id = id;
-    return ioctl(sockfd, HOMAIOCREPLY, &args);
+/**
+ * homa_send() - Send a request message to initiate an RPC.
+ * @sockfd:     File descriptor for the socket on which to send the message.
+ * @request:    First byte of buffer containing the request message.
+ * @reqlen:     Number of bytes at @request.
+ * @dest_addr:  Address of server to which the request should be sent.
+ * @addrlen:    Size of @dest_addr in bytes.
+ * @id:         A unique identifier for the request will be returned here;
+ *              this can be used later to find the response for this request.
+ * 
+ * Return:      0 means the request has been accepted for delivery. A
+ *              negative value indicates an error. 
+ */
+int homa_send(int sockfd, const void *request, size_t reqlen,
+		const struct sockaddr *dest_addr, size_t addrlen,
+		uint64_t *id)
+{
+	struct homa_args_send_ipv4 args;
+	int result;
+	
+	if (dest_addr->sa_family != AF_INET) {
+		errno = EAFNOSUPPORT;
+		return -EAFNOSUPPORT;
+	}
+	args.request = (void *) request;
+	args.reqlen = reqlen;
+	args.dest_addr = *((struct sockaddr_in *) dest_addr);
+	args.id = 0;
+	result = ioctl(sockfd, HOMAIOCSEND, &args);
+	*id = args.id;
+	return result;
 }
